@@ -27,6 +27,16 @@ def main():
     except Exception as e:
         print(f"[FFmpeg] Verification note: {e}")
 
+    # Ensure working Opus library is available (auto-downloads musl binary on Alpine Linux if needed)
+    try:
+        from utils.opus import ensure_opus
+        if ensure_opus():
+            print("[Opus] Verified working Opus library.")
+        else:
+            print("[Opus] Notice: Opus library could not be verified.")
+    except Exception as e:
+        print(f"[Opus] Verification note: {e}")
+
     # Clean up downloads directory on startup
     downloads_dir = os.path.abspath('downloads')
     if os.path.exists(downloads_dir):

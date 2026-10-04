@@ -6,6 +6,9 @@ cookies.txt
 *cookies*.txt
 downloads/
 bin/
+lib/
+*.so
+*.so.*
 *.mp3
 *.m4a
 *.webm

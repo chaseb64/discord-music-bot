@@ -10,6 +10,7 @@ import yt_dlp as youtube_dl
 from collections import defaultdict
 
 from utils.ffmpeg import get_ffmpeg_executable
+from utils.opus import ensure_opus
 
 # Suppress noise about console usage from errors
 youtube_dl.utils.bug_reports_message = lambda *args, **kwargs: ''
@@ -176,6 +177,7 @@ class Music(commands.Cog):
 
     async def _play_track(self, guild, voice_client, track):
         try:
+            ensure_opus()
             player = await YTDLSource.from_url(track['url'], loop=self.bot.loop)
             voice_client.play(player, after=lambda e: self._on_playback_end(guild, voice_client, e, player.file_path))
         except Exception as e:

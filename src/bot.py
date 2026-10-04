@@ -4,6 +4,8 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from utils.opus import ensure_opus
+
 # Load environment variables
 load_dotenv()
 
@@ -38,8 +40,13 @@ def main():
         print("Please set your DISCORD_TOKEN in the .env file.")
         return
 
+    # Ensure libopus is loaded for Discord voice support
+    if not ensure_opus():
+        print("[Opus] Warning: Opus shared library could not be loaded. Voice playback may fail.")
+
     bot = MusicBot()
     bot.run(token)
 
 if __name__ == '__main__':
     main()
+
