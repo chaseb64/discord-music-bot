@@ -48,6 +48,18 @@ class MusicBot(commands.Bot):
         except Exception as e:
             print(f"[Web Dashboard] Error launching web server: {e}")
 
+        # Check for updates in background
+        async def check_updates_bg():
+            try:
+                from version import check_github_update
+                up = await check_github_update()
+                if up.get("has_update"):
+                    print(f"\033[93m[Update Available]\033[0m A new version of Aether Beats is available: \033[1m{up['latest_version']}\033[0m (Current: {up['current_version']})")
+                    print(f"\033[93m[Update Available]\033[0m Release notes: {up['release_url']}")
+            except Exception:
+                pass
+        asyncio.create_task(check_updates_bg())
+
     async def close(self):
         if self.web_dashboard:
             if self.web_dashboard.broadcast_task:

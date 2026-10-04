@@ -511,8 +511,21 @@
     if (statGuilds) statGuilds.textContent = guilds;
 
     const versionTag = (stats.release && stats.release.tag) || stats.version || 'v2.4.0';
-    if (appVersionBadge) appVersionBadge.textContent = versionTag;
-    if (vitalsReleaseText) vitalsReleaseText.textContent = `Aether Beats ${versionTag}`;
+    const update = (stats && stats.update_info) || null;
+    if (appVersionBadge) {
+      if (update && update.has_update) {
+        appVersionBadge.innerHTML = `${escapeHtml(versionTag)} <a href="${escapeHtml(update.release_url)}" target="_blank" rel="noopener noreferrer" style="color: #60a5fa; text-decoration: none; margin-left: 6px; font-weight: 700; background: rgba(59, 130, 246, 0.2); padding: 2px 8px; border-radius: 9999px; border: 1px solid rgba(96, 165, 250, 0.4); font-size: 0.75rem;">🚀 Update ${escapeHtml(update.latest_version)}</a>`;
+      } else {
+        appVersionBadge.textContent = versionTag;
+      }
+    }
+    if (vitalsReleaseText) {
+      if (update && update.has_update) {
+        vitalsReleaseText.innerHTML = `Aether Beats ${escapeHtml(versionTag)} • <a href="${escapeHtml(update.release_url)}" target="_blank" rel="noopener noreferrer" style="color: #60a5fa; text-decoration: underline;">Update ${escapeHtml(update.latest_version)} Available</a>`;
+      } else {
+        vitalsReleaseText.textContent = `Aether Beats ${versionTag}`;
+      }
+    }
   }
 
   // --- Smooth Progress Bar & Scrubber Ticker ---

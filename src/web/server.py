@@ -69,9 +69,11 @@ class WebDashboard:
         ping = int(round(self.bot.latency * 1000)) if (self.bot.latency and self.bot.latency != float('inf')) else 0
         streams = getattr(self.bot, 'total_streams_completed', 0)
 
+        update_info = None
         try:
-            from version import get_release_info
+            from version import get_release_info, _cached_update_info
             rel = get_release_info()
+            update_info = _cached_update_info
         except Exception:
             rel = {'version': '2.4.0', 'tag': 'v2.4.0', 'codename': 'Valkyrie', 'commit': 'main', 'date': ''}
 
@@ -92,6 +94,7 @@ class WebDashboard:
             'guild_count': len(self.bot.guilds),
             'release': rel,
             'version': rel['tag'],
+            'update_info': update_info,
         }
 
     async def handle_index(self, request):
@@ -110,9 +113,11 @@ class WebDashboard:
             'avatar': str(self.bot.user.display_avatar.url) if (self.bot.user and self.bot.user.display_avatar) else "/static/images/logo.png",
         }
 
+        update_info = None
         try:
-            from version import get_release_info
+            from version import get_release_info, check_github_update
             rel = get_release_info()
+            update_info = await check_github_update()
         except Exception:
             rel = {'version': '2.4.0', 'tag': 'v2.4.0', 'codename': 'Valkyrie', 'commit': 'main', 'date': ''}
 
@@ -121,6 +126,7 @@ class WebDashboard:
             'bot': bot_user,
             'release': rel,
             'version': rel['tag'],
+            'update_info': update_info,
             'metrics': self.get_system_metrics(),
             'guilds': guilds_state,
         }
