@@ -40,9 +40,8 @@ ytdl_format_options = {
     'default_search': 'scsearch',  # Search SoundCloud by default when no URL given
     'source_address': '0.0.0.0',  # bind to ipv4
     'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
     },
     'retries': 5,
     'fragment_retries': 5,
@@ -143,10 +142,72 @@ class YTDLSource(discord.PCMVolumeTransformer):
         return cls(source, data=data, file_path=file_path, volume=volume)
 
     @classmethod
-    async def download_track(cls, url: str, *, loop=None) -> tuple[str, dict]:
-        """Downloads audio stream to downloads/ directory and returns (file_path, data) tuple."""
+    async def download_track(cls, url: str, *, fallback_urls: list = None, title: str = None, loop=None) -> tuple[str, dict]:
+        """Downloads audio stream to downloads/ directory with multi-candidate resilience and returns (file_path, data) tuple."""
         loop = loop or asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=True))
+
+        def _do_download():
+            urls_to_try = [url] + (list(fallback_urls) if fallback_urls else [])
+            last_err = None
+
+            for target in urls_to_try:
+                try:
+                    data = ytdl.extract_info(target, download=True)
+                    if data:
+                        return target, data
+                except Exception as e:
+                    print(f"[YTDL] Candidate '{target}' failed ({type(e).__name__}: {e})")
+                    last_err = e
+
+            # If initial URL and fallbacks failed, attempt smart alternative search
+            # (e.g. for SoundCloud Go+ / DRM protected tracks or region locks)
+            search_query = None
+            m = re.match(r'https?://soundcloud\.com/([^/]+)/([^/?#]+)', url)
+            if m:
+                artist_slug, track_slug = m.groups()
+                search_query = f"{artist_slug} {track_slug}".replace('-', ' ')
+            elif title:
+                search_query = title
+
+            if search_query:
+                print(f"[YTDL] Attempting fallback search for alternative uploads: '{search_query}'")
+                flat_opts = {
+                    'quiet': True,
+                    'no_warnings': True,
+                    'extract_flat': True,
+                    'skip_download': True,
+                    'ignoreerrors': True,
+                    'default_search': 'scsearch',
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                    }
+                }
+                flat_ydl = youtube_dl.YoutubeDL(flat_opts)
+                try:
+                    search_res = flat_ydl.extract_info(f"scsearch5:{search_query}", download=False)
+                    if search_res and 'entries' in search_res:
+                        for entry in search_res['entries']:
+                            if not entry:
+                                continue
+                            cand = entry.get('webpage_url') or entry.get('url')
+                            if cand and cand not in urls_to_try:
+                                try:
+                                    print(f"[YTDL] Trying alternative upload: '{cand}'")
+                                    data = ytdl.extract_info(cand, download=True)
+                                    if data:
+                                        return cand, data
+                                except Exception as cand_err:
+                                    print(f"[YTDL] Alternative candidate failed: {cand_err}")
+                                    continue
+                except Exception as search_err:
+                    print(f"[YTDL] Fallback search error: {search_err}")
+
+            if last_err:
+                raise last_err
+            raise RuntimeError(f"Unable to download audio stream for {url}")
+
+        final_url, data = await loop.run_in_executor(None, _do_download)
 
         if 'entries' in data:
             valid_entries = [e for e in data['entries'] if e]
@@ -173,8 +234,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
         return file_path, data
 
     @classmethod
-    async def from_url(cls, url: str, *, loop=None, volume: float = 0.5, seek: float = 0, filter_name: str = 'none'):
-        file_path, data = await cls.download_track(url, loop=loop)
+    async def from_url(cls, url: str, *, fallback_urls: list = None, title: str = None, loop=None, volume: float = 0.5, seek: float = 0, filter_name: str = 'none'):
+        file_path, data = await cls.download_track(url, fallback_urls=fallback_urls, title=title, loop=loop)
         return cls.create_player(file_path, data, volume=volume, seek=seek, filter_name=filter_name)
 
 class QueuePaginationView(discord.ui.View):
@@ -260,10 +321,19 @@ class Music(commands.Cog):
         track['is_downloading'] = True
         try:
             print(f"[Pre-Buffer] Pre-downloading upcoming track: '{track.get('title')}' in background...")
-            file_path, data = await YTDLSource.download_track(track['url'], loop=self.bot.loop)
+            file_path, data = await YTDLSource.download_track(
+                track['url'],
+                fallback_urls=track.get('fallback_urls'),
+                title=track.get('title'),
+                loop=self.bot.loop
+            )
             track['file_path'] = file_path
             track['data'] = data
             track['is_prebuffered'] = True
+            if data.get('title'):
+                track['title'] = data['title']
+            if data.get('webpage_url'):
+                track['url'] = data['webpage_url']
             if not track.get('duration') and data.get('duration'):
                 track['duration'] = data['duration']
             print(f"[Pre-Buffer] Successfully pre-buffered '{track.get('title')}' to {file_path}")
@@ -323,9 +393,8 @@ class Music(commands.Cog):
             'nocheckcertificate': True,
             'default_search': 'scsearch',
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
             }
         }
         search_ytdl = youtube_dl.YoutubeDL(search_opts)
@@ -363,10 +432,17 @@ class Music(commands.Cog):
                     if not thumbnail and entry.get('thumbnails'):
                         thumbnail = entry['thumbnails'][-1].get('url')
 
+                    alt_urls = [
+                        e.get('webpage_url') or e.get('url')
+                        for e in entries
+                        if (e.get('webpage_url') or e.get('url')) and (e.get('webpage_url') or e.get('url')) != cand_url
+                    ]
+
                     return {
                         'title': cand_title,
                         'url': cand_url,
                         'webpage_url': entry.get('webpage_url') or cand_url,
+                        'fallback_urls': alt_urls,
                         'thumbnail': thumbnail or '/static/images/vinyl.png',
                         'duration': duration,
                         'artist': entry.get('uploader') or entry.get('channel') or entry.get('creator') or (artist if not is_generic_artist else 'Autoplay Radio'),
@@ -386,10 +462,16 @@ class Music(commands.Cog):
                 thumbnail = entry.get('thumbnail')
                 if not thumbnail and entry.get('thumbnails'):
                     thumbnail = entry['thumbnails'][-1].get('url')
+                alt_urls = [
+                    e.get('webpage_url') or e.get('url')
+                    for e in candidate_pool
+                    if (e.get('webpage_url') or e.get('url')) and (e.get('webpage_url') or e.get('url')) != cand_url
+                ]
                 return {
                     'title': entry.get('title', 'Autoplay Track'),
                     'url': cand_url,
                     'webpage_url': cand_url,
+                    'fallback_urls': alt_urls,
                     'thumbnail': thumbnail or '/static/images/vinyl.png',
                     'duration': entry.get('duration') or 0,
                     'artist': entry.get('uploader') or 'Autoplay Radio',
@@ -470,9 +552,8 @@ class Music(commands.Cog):
             'nocheckcertificate': True,
             'default_search': 'scsearch',
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
             }
         }
         search_ytdl = youtube_dl.YoutubeDL(search_opts)
@@ -483,11 +564,17 @@ class Music(commands.Cog):
         if not data:
             return None
 
+        fallback_urls = []
         if 'entries' in data:
             valid_entries = [e for e in data['entries'] if e]
             if not valid_entries:
                 return None
             data = valid_entries[0]
+            fallback_urls = [
+                e.get('webpage_url') or e.get('url')
+                for e in valid_entries[1:]
+                if (e.get('webpage_url') or e.get('url'))
+            ]
 
         thumbnail = data.get('thumbnail')
         if not thumbnail and data.get('thumbnails'):
@@ -497,6 +584,7 @@ class Music(commands.Cog):
             'title': data.get('title') or query,
             'url': data.get('webpage_url') or data.get('url') or target,
             'webpage_url': data.get('webpage_url') or data.get('url') or target,
+            'fallback_urls': fallback_urls,
             'thumbnail': thumbnail or '/static/images/vinyl.png',
             'duration': data.get('duration') or 0,
             'artist': data.get('uploader') or data.get('channel') or data.get('creator') or 'SoundCloud',
@@ -544,11 +632,17 @@ class Music(commands.Cog):
             else:
                 player = await YTDLSource.from_url(
                     track['url'],
+                    fallback_urls=track.get('fallback_urls'),
+                    title=track.get('title'),
                     loop=self.bot.loop,
                     volume=curr_vol,
                     seek=seek,
                     filter_name=curr_filter
                 )
+                if player.title:
+                    track['title'] = player.title
+                if player.url:
+                    track['url'] = player.url
 
             self.current_tracks[guild.id] = {
                 'title': track.get('title') or player.title or 'Unknown Track',
