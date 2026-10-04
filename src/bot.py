@@ -48,8 +48,11 @@ class MusicBot(commands.Bot):
             print(f"[Web Dashboard] Error launching web server: {e}")
 
     async def close(self):
-        if self.web_dashboard and self.web_dashboard.broadcast_task:
-            self.web_dashboard.broadcast_task.cancel()
+        if self.web_dashboard:
+            if self.web_dashboard.broadcast_task:
+                self.web_dashboard.broadcast_task.cancel()
+            if self.web_dashboard.visualizer_task:
+                self.web_dashboard.visualizer_task.cancel()
         if self.web_runner:
             try:
                 await self.web_runner.cleanup()

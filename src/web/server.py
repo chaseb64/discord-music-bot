@@ -14,6 +14,7 @@ class WebDashboard:
         self.app = web.Application()
         self.websockets = set()
         self.broadcast_task = None
+        self.visualizer_task = None
         self.setup_routes()
 
     def setup_routes(self):
@@ -43,7 +44,12 @@ class WebDashboard:
         m, s = divmod(uptime_seconds, 60)
         h, m = divmod(m, 60)
         d, h = divmod(h, 24)
-        uptime_str = f"{d}d {h}h {m}m {s}s" if d > 0 else f"{h}h {m}s"
+        if d > 0:
+            uptime_str = f"{d}d {h}h {m}m"
+        elif h > 0:
+            uptime_str = f"{h}h {m}m {s}s"
+        else:
+            uptime_str = f"{m}m {s}s"
 
         ram = psutil.virtual_memory()
         cpu = psutil.cpu_percent(interval=None)
@@ -172,7 +178,7 @@ class WebDashboard:
         if not music_cog:
             return web.json_response({'error': 'Music system not ready'}, status=503)
 
-        success, msg = music_cog.stop_from_web(guild_id)
+        success, msg = await music_cog.stop_from_web(guild_id)
         await self.broadcast_update()
         return web.json_response({'success': success, 'message': msg})
 
@@ -283,6 +289,43 @@ class WebDashboard:
                 _log.debug(f"Broadcast loop error: {e}")
                 await asyncio.sleep(2)
 
+    async def start_visualizer_loop(self):
+        """Streams live 36-band audio spectrum levels to connected dashboards at 20 FPS (50ms)."""
+        while True:
+            try:
+                await asyncio.sleep(0.05)
+                if not self.websockets:
+                    continue
+
+                music_cog = self.get_music_cog()
+                if not music_cog or not music_cog.current_tracks:
+                    continue
+
+                bands_by_guild = {}
+                for gid, curr in list(music_cog.current_tracks.items()):
+                    player = curr.get('player')
+                    if player and hasattr(player, 'latest_bands'):
+                        bands_by_guild[str(gid)] = player.latest_bands
+
+                if bands_by_guild:
+                    payload = json.dumps({
+                        'type': 'visualizer_update',
+                        'bands_by_guild': bands_by_guild,
+                    })
+                    dead_ws = set()
+                    for ws in list(self.websockets):
+                        try:
+                            await ws.send_str(payload)
+                        except Exception:
+                            dead_ws.add(ws)
+                    for ws in dead_ws:
+                        self.websockets.discard(ws)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                _log.debug(f"Visualizer loop error: {e}")
+                await asyncio.sleep(0.1)
+
 async def start_web_server(bot):
     dashboard = WebDashboard(bot)
     runner = web.AppRunner(dashboard.app)
@@ -295,6 +338,7 @@ async def start_web_server(bot):
     await site.start()
 
     dashboard.broadcast_task = asyncio.create_task(dashboard.start_broadcast_loop())
+    dashboard.visualizer_task = asyncio.create_task(dashboard.start_visualizer_loop())
     print(f"[Web Dashboard] Dashboard running at http://localhost:{port} (bound to {host}:{port})")
 
     bot.web_dashboard = dashboard

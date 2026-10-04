@@ -13,6 +13,9 @@
   let currentTrackDuration = 0;
   let isPlaying = false;
   let isPaused = false;
+  const NUM_BARS = 36;
+  const realAudioBands = new Float32Array(NUM_BARS);
+  let lastAudioBandTime = 0;
   let ws = null;
   let reconnectTimeout = null;
   let progressInterval = null;
@@ -96,6 +99,16 @@
     ws.onmessage = function (event) {
       try {
         const message = JSON.parse(event.data);
+        if (message.type === 'visualizer_update' && message.bands_by_guild) {
+          const bands = message.bands_by_guild[currentGuildId];
+          if (bands && Array.isArray(bands)) {
+            for (let i = 0; i < Math.min(NUM_BARS, bands.length); i++) {
+              realAudioBands[i] = bands[i];
+            }
+            lastAudioBandTime = Date.now();
+          }
+          return;
+        }
         if (message.type === 'status_update' || message.type === 'STATE_UPDATE') {
           handleStateUpdate(message.data || message);
         }
@@ -268,6 +281,14 @@
       currentTrackStartTime = null;
     }
 
+    // Copy initial visualizer bands if available
+    if (guild.visualizer_bands && Array.isArray(guild.visualizer_bands)) {
+      for (let i = 0; i < Math.min(NUM_BARS, guild.visualizer_bands.length); i++) {
+        realAudioBands[i] = guild.visualizer_bands[i];
+      }
+      lastAudioBandTime = Date.now();
+    }
+
     // Queue
     renderQueue(guild.queue || []);
   }
@@ -378,8 +399,7 @@
     }, 500);
   }
 
-  // --- Dynamic Audio Equalizer Simulation ---
-  const NUM_BARS = 36;
+  // --- Dynamic Audio Equalizer (Real-Time Music FFT) ---
   const barHeights = new Float32Array(NUM_BARS);
   const targetHeights = new Float32Array(NUM_BARS);
 
@@ -400,23 +420,33 @@
     vCtx.clearRect(0, 0, w, h);
 
     const barWidth = (w / NUM_BARS) - 3;
-    const time = Date.now() * 0.0035;
+    const time = Date.now() * 0.003;
+    const hasLiveAudio = (isPlaying && !isPaused && (Date.now() - lastAudioBandTime < 800));
 
     for (let i = 0; i < NUM_BARS; i++) {
-      if (isPlaying && !isPaused) {
-        const wave = Math.sin(time * 2.2 + i * 0.28) * 0.45 + 0.5;
-        const sub = Math.cos(time * 3.1 - i * 0.18) * 0.35 + 0.35;
-        const noise = Math.random() * 0.25;
-        const dynamicVal = Math.min(1, Math.max(0.1, (wave * 0.5 + sub * 0.35 + noise) * (0.85 + 0.35 * Math.sin(time + i))));
-        targetHeights[i] = dynamicVal * (h * 0.88);
+      if (hasLiveAudio) {
+        // ACTUAL real-time frequency spectrum directly from the music playback!
+        const bandVal = realAudioBands[i] || 0.0;
+        targetHeights[i] = Math.max(3, bandVal * (h * 0.94));
+      } else if (isPlaying && !isPaused) {
+        // Subtle rhythmic idle wave while audio starts
+        const idleWave = Math.sin(time * 2.0 + i * 0.25) * 0.15 + 0.2;
+        targetHeights[i] = idleWave * (h * 0.4);
       } else {
-        const idleWave = Math.sin(time * 0.8 + i * 0.25) * 0.12 + 0.15;
-        targetHeights[i] = idleWave * (h * 0.3);
+        // Paused or stopped: gentle flatline / tiny idle ripple
+        const idleWave = Math.sin(time * 0.7 + i * 0.2) * 0.04 + 0.05;
+        targetHeights[i] = idleWave * (h * 0.2);
       }
 
-      barHeights[i] += (targetHeights[i] - barHeights[i]) * 0.25;
+      // Responsive attack (0.6) and smooth decay (0.28)
+      const diff = targetHeights[i] - barHeights[i];
+      if (diff > 0) {
+        barHeights[i] += diff * 0.6; // Instant reaction to beats / bass
+      } else {
+        barHeights[i] += diff * 0.28; // Smooth studio falloff
+      }
 
-      const barHeight = Math.max(4, barHeights[i]);
+      const barHeight = Math.max(3, barHeights[i]);
       const x = i * (barWidth + 3);
       const y = h - barHeight;
 
@@ -490,9 +520,33 @@
     btnStop.addEventListener('click', async function () {
       if (!currentGuildId) return;
       try {
-        await apiCall('/api/stop', 'POST', { guild_id: currentGuildId });
-        showToast('Stopped playback and left channel', 'info');
-      } catch (e) {}
+        btnStop.disabled = true;
+        const res = await apiCall('/api/stop', 'POST', { guild_id: currentGuildId });
+        showToast(res.message || 'Stopped playback and left channel', 'info');
+        isPlaying = false;
+        isPaused = false;
+        realAudioBands.fill(0);
+        targetHeights.fill(0);
+        if (channelName) channelName.textContent = 'Not in Voice';
+        if (listenerCount) listenerCount.textContent = '0 listeners';
+        if (statusBadge) {
+          statusBadge.textContent = 'IDLE';
+          statusBadge.style.background = 'rgba(88, 101, 242, 0.15)';
+          statusBadge.style.color = '#A5B4FC';
+          statusBadge.style.borderColor = 'rgba(88, 101, 242, 0.3)';
+        }
+        if (artWrap) artWrap.classList.remove('is-playing');
+        if (playPauseIcon) playPauseIcon.innerHTML = ICON_PLAY;
+        if (trackTitle) trackTitle.textContent = 'No Track Playing';
+        if (trackArtist) trackArtist.textContent = 'Queue a track below or use /play in Discord';
+        if (currentTimeEl) currentTimeEl.textContent = '0:00';
+        if (totalDurationEl) totalDurationEl.textContent = '0:00';
+        if (progressBarFill) progressBarFill.style.width = '0%';
+        renderQueue([]);
+      } catch (e) {
+      } finally {
+        btnStop.disabled = false;
+      }
     });
   }
 
@@ -607,7 +661,7 @@
   }
 
   function formatUptime(seconds) {
-    if (isNaN(seconds) || seconds <= 0) return '00:00:00';
+    if (isNaN(seconds) || seconds <= 0) return '0m 0s';
     const s = Math.floor(seconds);
     const d = Math.floor(s / 86400);
     const h = Math.floor((s % 86400) / 3600);
@@ -615,7 +669,8 @@
     const sec = s % 60;
 
     if (d > 0) return `${d}d ${h}h ${m}m`;
-    return `${h < 10 ? '0' : ''}${h}:${m < 10 ? '0' : ''}${m}:${sec < 10 ? '0' : ''}${sec}`;
+    if (h > 0) return `${h}h ${m}m ${sec}s`;
+    return `${m}m ${sec}s`;
   }
 
   function escapeHtml(str) {

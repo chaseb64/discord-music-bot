@@ -12,6 +12,7 @@ from collections import defaultdict
 
 from utils.ffmpeg import get_ffmpeg_executable
 from utils.opus import ensure_opus
+from utils.audio_analyzer import AudioSpectrumAnalyzer
 
 # Suppress noise about console usage from errors
 youtube_dl.utils.bug_reports_message = lambda *args, **kwargs: ''
@@ -61,6 +62,19 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.file_path = file_path
         self.title = data.get('title')
         self.url = data.get('url')
+        self.analyzer = AudioSpectrumAnalyzer(num_bands=36, fft_size=256)
+        self.latest_bands = [0.0] * 36
+
+    def read(self) -> bytes:
+        data = super().read()
+        if data:
+            try:
+                self.latest_bands = self.analyzer.analyze(data)
+            except Exception:
+                pass
+        else:
+            self.latest_bands = [0.0] * 36
+        return data
 
     @property
     def _current_error(self):
@@ -274,6 +288,7 @@ class Music(commands.Cog):
             player = curr.get('player')
             curr_volume = int(round((player.volume if player else 0.5) * 100))
             elapsed = int(round(time.time() - curr.get('start_time', time.time()))) if (is_playing and not is_paused) else 0
+            bands = player.latest_bands if (player and hasattr(player, 'latest_bands')) else ([0.0] * 36)
 
             curr_dict = {
                 'title': curr['title'],
@@ -289,7 +304,10 @@ class Music(commands.Cog):
                 'is_playing': is_playing,
                 'is_paused': is_paused,
                 'volume': curr_volume,
+                'visualizer_bands': bands,
             }
+        else:
+            bands = [0.0] * 36
 
         queue_list = []
         for i, t in enumerate(self.queues.get(guild_id, [])):
@@ -319,6 +337,7 @@ class Music(commands.Cog):
             'listeners': listeners,
             'current_track': curr_dict,
             'queue': queue_list,
+            'visualizer_bands': bands,
         }
 
     def get_all_guilds_state(self):
@@ -383,15 +402,22 @@ class Music(commands.Cog):
             return True, "Skipped current track."
         return False, "No track is playing."
 
-    def stop_from_web(self, guild_id: int):
+    async def stop_from_web(self, guild_id: int):
         guild = self.bot.get_guild(guild_id)
-        if not guild or not guild.voice_client:
-            return False, "Not connected to voice."
-        vc = guild.voice_client
+        if not guild:
+            return False, "Guild not found."
         self.queues[guild.id].clear()
         self.play_loops.pop(guild.id, None)
         self.current_tracks.pop(guild.id, None)
-        vc.stop()
+        vc = guild.voice_client
+        if vc:
+            if vc.is_playing() or vc.is_paused():
+                vc.stop()
+            try:
+                await vc.disconnect(force=True)
+            except Exception as e:
+                print(f"[Music] Error disconnecting from voice: {e}")
+            return True, "Stopped playback and disconnected from voice channel."
         return True, "Stopped playback and cleared queue."
 
     def set_volume_from_web(self, guild_id: int, volume_pct: int):
