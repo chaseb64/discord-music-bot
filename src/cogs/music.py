@@ -6,6 +6,13 @@ from discord import app_commands
 import yt_dlp as youtube_dl
 from collections import defaultdict
 
+# Automatically register portable static ffmpeg binary paths if installed
+try:
+    import static_ffmpeg
+    static_ffmpeg.add_paths()
+except ImportError:
+    pass
+
 # Suppress noise about console usage from errors
 youtube_dl.utils.bug_reports_message = lambda *args, **kwargs: ''
 
@@ -24,6 +31,7 @@ ytdl_format_options = {
     'extractor_args': {
         'youtube': {
             'player_client': ['android', 'ios'],
+            'player_skip': ['webpage', 'configs'],
         }
     },
 }
@@ -56,7 +64,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
             data = data['entries'][0]
 
         filename = data['url'] if stream else ytdl.prepare_filename(data)
-        return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
+        ffmpeg_executable = os.getenv('FFMPEG_PATH', 'ffmpeg')
+        return cls(discord.FFmpegPCMAudio(filename, executable=ffmpeg_executable, **ffmpeg_options), data=data)
 
 class QueuePaginationView(discord.ui.View):
     def __init__(self, queue, page=1):
