@@ -7,35 +7,45 @@ from discord import app_commands
 import yt_dlp as youtube_dl
 from collections import defaultdict
 
+import subprocess
+
+def is_working_ffmpeg(path):
+    if not path:
+        return False
+    try:
+        p = subprocess.run([path, '-version'], capture_output=True, text=True, timeout=3)
+        return p.returncode == 0
+    except Exception:
+        return False
+
 # Helper to resolve a valid FFmpeg executable path across all platforms/containers
 def get_ffmpeg_executable():
     # 1. Custom environment variable override if specified
     custom_path = os.getenv('FFMPEG_PATH')
-    if custom_path and shutil.which(custom_path):
+    if custom_path and is_working_ffmpeg(custom_path):
         return custom_path
 
-    # 2. Prefer bundled imageio-ffmpeg binary if installed (provides standalone absolute path)
+    # 2. Check standard system locations
+    candidates = [
+        shutil.which('ffmpeg'),
+        '/usr/bin/ffmpeg',
+        '/usr/local/bin/ffmpeg',
+        'ffmpeg'
+    ]
+    for c in candidates:
+        if c and is_working_ffmpeg(c):
+            return c
+
+    # 3. Optional fallback to imageio-ffmpeg if available and functional
     try:
         import imageio_ffmpeg
         exe = imageio_ffmpeg.get_ffmpeg_exe()
-        if exe and os.path.exists(exe):
+        if is_working_ffmpeg(exe):
             return exe
     except Exception:
         pass
 
-    # 3. Try static-ffmpeg
-    try:
-        import static_ffmpeg
-        static_ffmpeg.add_paths()
-    except Exception:
-        pass
-
-    # 4. Check system PATH
-    which_bin = shutil.which('ffmpeg')
-    if which_bin:
-        return which_bin
-
-    return 'ffmpeg'
+    return None
 
 # Suppress noise about console usage from errors
 youtube_dl.utils.bug_reports_message = lambda *args, **kwargs: ''
@@ -89,6 +99,11 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
         filename = data['url'] if stream else ytdl.prepare_filename(data)
         ffmpeg_executable = get_ffmpeg_executable()
+        if not ffmpeg_executable:
+            raise RuntimeError(
+                "No working FFmpeg executable found on this system. "
+                "If hosted on Pterodactyl (Alpine Linux), please add 'ffmpeg' to 'Additional Packages' (or 'PACKAGES') in the Startup tab and restart."
+            )
         return cls(discord.FFmpegPCMAudio(filename, executable=ffmpeg_executable, **ffmpeg_options), data=data)
 
 class QueuePaginationView(discord.ui.View):

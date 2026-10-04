@@ -4,13 +4,6 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
-# Ensure ffmpeg binary paths are available
-try:
-    import static_ffmpeg
-    static_ffmpeg.add_paths()
-except ImportError:
-    pass
-
 # Load environment variables
 load_dotenv()
 
