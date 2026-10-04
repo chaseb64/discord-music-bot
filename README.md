@@ -59,7 +59,7 @@ A feature-packed, high-performance Discord music bot powered by `discord.py` (v2
    Edit `.env` and supply your Discord Bot Token:
    ```env
    DISCORD_TOKEN=your_bot_token_here
-   DASHBOARD_PORT=8080
+   DASHBOARD_PORT=25567
    ```
 
 3. **Launch the Bot & Dashboard:**
@@ -76,9 +76,9 @@ A feature-packed, high-performance Discord music bot powered by `discord.py` (v2
 4. **Access the Dashboard:**
    Open your browser to:
    ```text
-   http://localhost:8080
+   http://localhost:25567
    ```
-   *(Or `http://<your-server-ip>:8080` if hosted remotely)*
+   *(Or `http://<your-server-ip>:25567` if hosted remotely)*
 
 ---
 

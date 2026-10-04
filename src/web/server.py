@@ -288,7 +288,7 @@ async def start_web_server(bot):
     runner = web.AppRunner(dashboard.app)
     await runner.setup()
 
-    port = int(os.getenv('PORT') or os.getenv('DASHBOARD_PORT') or 8080)
+    port = int(os.getenv('PORT') or os.getenv('DASHBOARD_PORT') or 25567)
     host = '0.0.0.0'
 
     site = web.TCPSite(runner, host, port)
