@@ -4,7 +4,7 @@ import sys
 def main():
     # Install dependencies
     print("Installing requirements...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "-r", "requirements.txt"])
 
     # Run the bot
     print("Starting the bot...")
