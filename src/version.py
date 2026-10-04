@@ -7,7 +7,7 @@ import time
 import shutil
 import subprocess
 
-__version__ = "2.4.1"
+__version__ = "2.4.2"
 __codename__ = "Valkyrie"
 __repo__ = "chaseb64/discord-music-bot"
 

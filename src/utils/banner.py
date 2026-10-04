@@ -72,7 +72,7 @@ def print_banner(port: int = 25567):
         from version import get_release_info
         rel = get_release_info()
     except Exception:
-        rel = {"version": "2.4.1", "tag": "v2.4.1", "codename": "Valkyrie", "commit": ""}
+        rel = {"version": "2.4.2", "tag": "v2.4.2", "codename": "Valkyrie", "commit": ""}
 
     lines = [
         "",

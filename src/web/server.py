@@ -75,7 +75,7 @@ class WebDashboard:
             rel = get_release_info()
             update_info = _cached_update_info
         except Exception:
-            rel = {'version': '2.4.1', 'tag': 'v2.4.1', 'codename': 'Valkyrie', 'commit': 'main', 'date': ''}
+            rel = {'version': '2.4.2', 'tag': 'v2.4.2', 'codename': 'Valkyrie', 'commit': 'main', 'date': ''}
 
         return {
             'uptime_str': uptime_str,
@@ -119,7 +119,7 @@ class WebDashboard:
             rel = get_release_info()
             update_info = await check_github_update()
         except Exception:
-            rel = {'version': '2.4.1', 'tag': 'v2.4.1', 'codename': 'Valkyrie', 'commit': 'main', 'date': ''}
+            rel = {'version': '2.4.2', 'tag': 'v2.4.2', 'codename': 'Valkyrie', 'commit': 'main', 'date': ''}
 
         data = {
             'online': True,

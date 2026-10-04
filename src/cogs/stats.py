@@ -37,7 +37,7 @@ class Stats(commands.Cog):
             if update.get("has_update"):
                 ver_text += f"\n:rocket: **Update Available: [{update['latest_version']}]({update['release_url']})**"
         except Exception:
-            ver_text = "**v2.4.1**"
+            ver_text = "**v2.4.2**"
 
         # Build embed
         embed = discord.Embed(title="Bot Statistics & Resources", color=discord.Color.blue())
