@@ -37,16 +37,16 @@ def main():
     except Exception as e:
         print(f"[Opus] Verification note: {e}")
 
-    # Clean up downloads directory on startup
+    # Clean up downloads and uploads directory on startup
     downloads_dir = os.path.abspath('downloads')
     if os.path.exists(downloads_dir):
-        for f in os.listdir(downloads_dir):
-            p = os.path.join(downloads_dir, f)
-            try:
-                if os.path.isfile(p):
+        for root, dirs, files in os.walk(downloads_dir):
+            for f in files:
+                p = os.path.join(root, f)
+                try:
                     os.remove(p)
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
     # Run the bot
     print("Starting the bot...")

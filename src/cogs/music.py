@@ -304,6 +304,8 @@ class Music(commands.Cog):
         self.played_titles = defaultdict(lambda: deque(maxlen=80))
         # Active pre-buffering tasks per guild
         self.prebuffering_tasks = {}
+        # Track active skip requests per guild
+        self.is_skipping = {}
 
     async def prebuffer_track(self, track: dict) -> bool:
         """Pre-downloads the audio file for an upcoming track in the background for zero-gap playback."""
@@ -684,28 +686,31 @@ class Music(commands.Cog):
 
         settings = self.guild_settings[guild.id]
         loop_mode = settings.get('loop', 'off')
+        is_skip = self.is_skipping.pop(guild.id, False)
 
         # Increment total streams completed
         if hasattr(self.bot, 'total_streams_completed'):
             self.bot.total_streams_completed += 1
 
         # Looping logic:
-        if loop_mode == 'track' and track:
+        if loop_mode == 'track' and track and not is_skip:
             # Replay same track immediately
             self.queues[guild.id].insert(0, track)
             self.play_next(guild, voice_client)
             return
-        elif loop_mode == 'queue' and track:
+        elif loop_mode == 'queue' and track and not is_skip:
             # Re-enqueue track to end of queue
             self.queues[guild.id].append(track)
 
-        # Clean up finished downloaded file if not local upload and loop mode is off
+        # Clean up finished or skipped audio file (both downloaded streams and uploaded MP3s)
         if file_path and os.path.exists(file_path):
-            if loop_mode != 'track' and not (track and track.get('is_local')):
-                try:
-                    os.remove(file_path)
-                except Exception:
-                    pass
+            if loop_mode != 'track' or is_skip:
+                if loop_mode != 'queue' or is_skip:
+                    try:
+                        os.remove(file_path)
+                        print(f"[Cleanup] Successfully removed finished/skipped audio file: {file_path}")
+                    except Exception as e:
+                        print(f"[Cleanup] Error removing audio file '{file_path}': {e}")
 
         # Advance queue or trigger Autoplay fallback
         if len(self.queues[guild.id]) > 0:
@@ -920,6 +925,7 @@ class Music(commands.Cog):
             return False, "Not connected to voice."
         vc = guild.voice_client
         if vc.is_playing() or vc.is_paused():
+            self.is_skipping[guild_id] = True
             vc.stop()
             return True, "Skipped current track."
         return False, "No track is playing."
@@ -928,9 +934,24 @@ class Music(commands.Cog):
         guild = self.bot.get_guild(guild_id)
         if not guild:
             return False, "Guild not found."
+        # Clean up any files remaining in queue
+        for t in self.queues[guild.id]:
+            fp = t.get('file_path')
+            if fp and os.path.exists(fp):
+                try:
+                    os.remove(fp)
+                    print(f"[Cleanup] Removed queue track file on stop: {fp}")
+                except Exception:
+                    pass
         self.queues[guild.id].clear()
         self.play_loops.pop(guild.id, None)
-        self.current_tracks.pop(guild.id, None)
+        curr = self.current_tracks.pop(guild.id, None)
+        if curr and curr.get('file_path') and os.path.exists(curr['file_path']):
+            try:
+                os.remove(curr['file_path'])
+                print(f"[Cleanup] Removed active track file on stop: {curr['file_path']}")
+            except Exception:
+                pass
         vc = guild.voice_client
         if vc:
             if vc.is_playing() or vc.is_paused():
@@ -960,6 +981,18 @@ class Music(commands.Cog):
         q = self.queues.get(guild.id, [])
         if 0 <= index < len(q):
             removed = q.pop(index)
+            fp = removed.get('file_path')
+            if fp and os.path.exists(fp):
+                in_use = any(t.get('file_path') == fp for t in q)
+                curr = self.current_tracks.get(guild.id)
+                if curr and curr.get('file_path') == fp:
+                    in_use = True
+                if not in_use:
+                    try:
+                        os.remove(fp)
+                        print(f"[Cleanup] Removed deleted queue track file: {fp}")
+                    except Exception as e:
+                        print(f"[Cleanup] Error removing track file '{fp}': {e}")
             return True, f"Removed {removed['title']}"
         return False, "Invalid track index."
 
@@ -1155,6 +1188,7 @@ class Music(commands.Cog):
     async def skip(self, interaction: discord.Interaction):
         voice_client = interaction.guild.voice_client
         if voice_client and (voice_client.is_playing() or voice_client.is_paused()):
+            self.is_skipping[interaction.guild.id] = True
             voice_client.stop()
             await interaction.response.send_message("Skipped the current song.")
         else:
@@ -1164,8 +1198,23 @@ class Music(commands.Cog):
     async def stop(self, interaction: discord.Interaction):
         voice_client = interaction.guild.voice_client
         if voice_client:
+            for t in self.queues[interaction.guild.id]:
+                fp = t.get('file_path')
+                if fp and os.path.exists(fp):
+                    try:
+                        os.remove(fp)
+                        print(f"[Cleanup] Removed queue track file on stop: {fp}")
+                    except Exception:
+                        pass
             self.queues[interaction.guild.id].clear()
             self.play_loops.pop(interaction.guild.id, None)
+            curr = self.current_tracks.pop(interaction.guild.id, None)
+            if curr and curr.get('file_path') and os.path.exists(curr['file_path']):
+                try:
+                    os.remove(curr['file_path'])
+                    print(f"[Cleanup] Removed active track file on stop: {curr['file_path']}")
+                except Exception:
+                    pass
             voice_client.stop()
             await voice_client.disconnect()
             await interaction.response.send_message("Stopped the music, cleared the queue, and disconnected.")
