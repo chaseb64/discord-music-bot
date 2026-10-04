@@ -84,10 +84,13 @@ AUDIO_FILTERS = {
 def probe_audio_duration(file_path: str) -> float:
     """Probes the total duration of an audio file in seconds using FFmpeg."""
     try:
-        bin_path = get_ffmpeg_executable()
-        if not bin_path or not os.path.exists(file_path):
+        if not file_path or not isinstance(file_path, str):
             return 0.0
-        cmd = [bin_path, '-i', file_path, '-f', 'null', '-']
+        abs_path = os.path.abspath(file_path)
+        bin_path = get_ffmpeg_executable()
+        if not bin_path or not os.path.isfile(abs_path):
+            return 0.0
+        cmd = [bin_path, '-i', abs_path, '-f', 'null', '-']
         res = subprocess.run(cmd, capture_output=True, text=True)
         match = re.search(r'Duration:\s*(\d+):(\d+):(\d+\.?\d*)', res.stderr)
         if match:
