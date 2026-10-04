@@ -2,3 +2,5 @@ discord.py[voice]>=2.0
 yt-dlp>=2025.1.15
 psutil>=5.9.0
 python-dotenv>=1.0.0
+aiohttp>=3.9.0
+

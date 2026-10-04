@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aether Beats &bull; Discord Music Command Center</title>
+  <meta name="description" content="Ultra-sleek real-time web command center for your Discord music bot with audio visualizer, interactive queue, and live telemetry.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" type="image/png" href="/static/images/logo.png">
+</head>
+<body>
+  <!-- Ambient Floating Mesh Glows -->
+  <div class="bg-mesh">
+    <div class="mesh-blob blob-1"></div>
+    <div class="mesh-blob blob-2"></div>
+    <div class="mesh-blob blob-3"></div>
+  </div>
+
+  <div class="app-container">
+    <!-- Header & Navigation Bar -->
+    <header class="app-header">
+      <div class="brand-section">
+        <div class="brand-logo-wrap">
+          <img src="/static/images/logo.png" alt="Aether Beats Logo" class="brand-logo" width="48" height="48" style="width: 48px; height: 48px; object-fit: cover; border-radius: 14px;">
+        </div>
+        <div class="brand-info">
+          <span class="brand-title">AETHER BEATS</span>
+          <div class="status-badge" id="connectionBadge">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="connectionText">CONNECTING...</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="header-controls">
+        <div class="guild-select-wrap">
+          <select id="guildSelect" class="guild-select">
+            <option value="" disabled selected>Loading Discord Servers...</option>
+          </select>
+          <div class="guild-select-arrow">▼</div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Dashboard Grid -->
+    <main class="dashboard-grid">
+
+      <!-- LEFT COLUMN: Now Playing & Add to Queue -->
+      <section class="player-stage">
+        
+        <!-- Now Playing Card -->
+        <div class="glass-card now-playing-card">
+          <div class="stage-top">
+            <div class="album-art-wrap" id="artWrap">
+              <img id="albumArt" src="/static/images/vinyl.png" alt="Track Artwork" class="album-art">
+            </div>
+
+            <div class="track-meta">
+              <div class="badge-row">
+                <span class="track-tag" id="statusBadge">IDLE</span>
+                <span class="track-tag" id="sourceBadge">SoundCloud</span>
+              </div>
+              <h1 class="track-title" id="trackTitle">No Track Playing</h1>
+              <p class="track-artist" id="trackArtist">Queue a track below or use /play in Discord</p>
+            </div>
+          </div>
+
+          <!-- Dynamic Audio Equalizer Canvas -->
+          <div class="visualizer-container">
+            <canvas id="equalizerCanvas"></canvas>
+          </div>
+
+          <!-- Progress Bar & Timestamps -->
+          <div class="progress-section">
+            <div class="progress-bar-wrap" id="progressBarWrap">
+              <div class="progress-bar-fill" id="progressBarFill"></div>
+            </div>
+            <div class="time-row">
+              <span id="currentTime">0:00</span>
+              <span id="totalDuration">0:00</span>
+            </div>
+          </div>
+
+          <!-- Controls Deck -->
+          <div class="controls-deck">
+            <div class="playback-buttons">
+              <button class="btn-ctrl" id="btnPrev" title="Replay / Restart">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="19 20 9 12 19 4 19 20"></polygon><line x1="5" y1="19" x2="5" y2="5"></line></svg>
+              </button>
+              <button class="btn-ctrl btn-play-pause" id="btnPlayPause" title="Play/Pause">
+                <svg id="playPauseIcon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              </button>
+              <button class="btn-ctrl" id="btnSkip" title="Skip Track">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
+              </button>
+              <button class="btn-ctrl btn-stop" id="btnStop" title="Stop & Leave Voice">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"></rect></svg>
+              </button>
+            </div>
+
+            <!-- Volume Control -->
+            <div class="volume-control-wrap">
+              <span class="vol-icon" id="volIcon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+              </span>
+              <input type="range" class="vol-slider" id="volumeSlider" min="0" max="100" value="100">
+              <span class="vol-label" id="volumeLabel">100%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Add / Search Form -->
+        <div class="glass-card search-card">
+          <form id="searchForm" class="search-form">
+            <div class="search-input-wrap">
+              <div class="search-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              </div>
+              <input type="text" id="searchInput" class="search-input" placeholder="Search track on SoundCloud or paste direct URL..." autocomplete="off" required>
+            </div>
+            <button type="submit" id="btnAddTrack" class="btn-add">
+              <span>Add to Queue</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+          </form>
+        </div>
+
+      </section>
+
+      <!-- RIGHT COLUMN: Interactive Queue & System Vitals -->
+      <aside class="sidebar-col">
+
+        <!-- Live Queue Card -->
+        <div class="glass-card queue-card">
+          <div class="card-header-row">
+            <div class="card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>
+              <span>Queue</span>
+              <span class="count-chip" id="queueCount">0</span>
+            </div>
+          </div>
+
+          <div class="queue-list" id="queueList">
+            <div class="queue-empty-state" id="queueEmpty">
+              <div class="empty-icon">
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+              </div>
+              <p>Queue is empty</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- System Vitals Card -->
+        <div class="glass-card vitals-card">
+          <div class="card-header-row">
+            <div class="card-title">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+              <span>System Vitals</span>
+            </div>
+          </div>
+
+          <div class="vitals-grid">
+            <!-- CPU -->
+            <div class="stat-box">
+              <span class="stat-label">CPU LOAD</span>
+              <span class="stat-value" id="statCpu">0.0%</span>
+              <div class="stat-bar-track">
+                <div class="stat-bar-fill fill-cpu" id="barCpu" style="width: 0%;"></div>
+              </div>
+            </div>
+
+            <!-- RAM -->
+            <div class="stat-box">
+              <span class="stat-label">RAM USAGE</span>
+              <span class="stat-value" id="statRam">0 MB</span>
+              <div class="stat-bar-track">
+                <div class="stat-bar-fill fill-ram" id="barRam" style="width: 0%;"></div>
+              </div>
+            </div>
+
+            <!-- UPTIME -->
+            <div class="stat-box">
+              <span class="stat-label">UPTIME</span>
+              <span class="stat-value" id="statUptime">00:00:00</span>
+            </div>
+
+            <!-- PING -->
+            <div class="stat-box">
+              <span class="stat-label">GATEWAY PING</span>
+              <span class="stat-value" id="statPing">0 ms</span>
+            </div>
+
+            <!-- STREAMS -->
+            <div class="stat-box">
+              <span class="stat-label">STREAMS</span>
+              <span class="stat-value" id="statStreams">0</span>
+            </div>
+
+            <!-- SERVERS -->
+            <div class="stat-box">
+              <span class="stat-label">SERVERS</span>
+              <span class="stat-value" id="statGuilds">0</span>
+            </div>
+          </div>
+
+          <!-- Channel Info Pill -->
+          <div class="channel-info-pill" id="channelPill">
+            <div class="channel-name-wrap">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+              <span id="channelName">Not in Voice</span>
+            </div>
+            <span class="listeners-count" id="listenerCount">0 listeners</span>
+          </div>
+        </div>
+
+      </aside>
+
+    </main>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer"></div>
+
+  <!-- Client Application Controller -->
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

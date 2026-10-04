@@ -2,6 +2,7 @@ import asyncio
 import os
 import shutil
 import subprocess
+import time
 import traceback
 import discord
 from discord.ext import commands
@@ -167,6 +168,44 @@ class Music(commands.Cog):
         self.queues = defaultdict(list)
         # Prevent starting multiple playback loops per guild
         self.play_loops = {}
+        # Currently active track details per guild
+        self.current_tracks = {}
+
+    async def extract_track_info(self, query: str):
+        """Extracts metadata and direct streamable info for a track or query."""
+        if query.startswith(('http://', 'https://', 'scsearch:', 'ytsearch:')):
+            target = query
+        else:
+            target = f"scsearch5:{query}"
+
+        search_opts = dict(ytdl_format_options)
+        search_opts['ignoreerrors'] = True
+        search_ytdl = youtube_dl.YoutubeDL(search_opts)
+
+        loop = self.bot.loop or asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, lambda: search_ytdl.extract_info(target, download=False))
+
+        if not data:
+            return None
+
+        if 'entries' in data:
+            valid_entries = [e for e in data['entries'] if e]
+            if not valid_entries:
+                return None
+            data = valid_entries[0]
+
+        thumbnail = data.get('thumbnail')
+        if not thumbnail and data.get('thumbnails'):
+            thumbnail = data['thumbnails'][-1].get('url')
+
+        return {
+            'title': data.get('title') or query,
+            'url': data.get('webpage_url') or data.get('url') or target,
+            'webpage_url': data.get('webpage_url') or data.get('url') or target,
+            'thumbnail': thumbnail or '/static/images/vinyl.png',
+            'duration': data.get('duration') or 0,
+            'artist': data.get('uploader') or data.get('channel') or data.get('creator') or 'SoundCloud',
+        }
 
     def play_next(self, guild, voice_client):
         if len(self.queues[guild.id]) > 0:
@@ -179,13 +218,25 @@ class Music(commands.Cog):
         try:
             ensure_opus()
             player = await YTDLSource.from_url(track['url'], loop=self.bot.loop)
+            self.current_tracks[guild.id] = {
+                'title': track.get('title') or player.title or 'Unknown Track',
+                'url': track.get('url', ''),
+                'webpage_url': track.get('webpage_url') or track.get('url', ''),
+                'thumbnail': track.get('thumbnail') or '/static/images/vinyl.png',
+                'duration': track.get('duration', 0),
+                'artist': track.get('artist', 'SoundCloud'),
+                'start_time': time.time(),
+                'player': player,
+            }
             voice_client.play(player, after=lambda e: self._on_playback_end(guild, voice_client, e, player.file_path))
         except Exception as e:
+            self.current_tracks.pop(guild.id, None)
             print(f"Error playing track ({type(e).__name__}): {e}")
             traceback.print_exc()
             self.play_next(guild, voice_client)
 
     def _on_playback_end(self, guild, voice_client, error, file_path=None):
+        self.current_tracks.pop(guild.id, None)
         if error:
             print(f'Player error ({type(error).__name__}): {error}')
 
@@ -201,6 +252,169 @@ class Music(commands.Cog):
             self.bot.total_streams_completed += 1
 
         self.play_next(guild, voice_client)
+
+    def get_guild_state(self, guild_id: int):
+        """Returns the complete playback and queue state for a guild."""
+        guild = self.bot.get_guild(guild_id)
+        if not guild:
+            return None
+
+        voice_client = guild.voice_client
+        connected = voice_client is not None and voice_client.is_connected()
+        channel_name = voice_client.channel.name if (connected and voice_client.channel) else None
+        listeners = [m.display_name for m in (voice_client.channel.members if (connected and voice_client.channel) else []) if not m.bot]
+
+        curr = self.current_tracks.get(guild_id)
+        curr_dict = None
+        is_playing = voice_client.is_playing() if connected else False
+        is_paused = voice_client.is_paused() if connected else False
+        curr_volume = 100
+
+        if curr and connected:
+            player = curr.get('player')
+            curr_volume = int(round((player.volume if player else 0.5) * 100))
+            elapsed = int(round(time.time() - curr.get('start_time', time.time()))) if (is_playing and not is_paused) else 0
+
+            curr_dict = {
+                'title': curr['title'],
+                'url': curr['url'],
+                'webpage_url': curr.get('webpage_url', ''),
+                'thumbnail': curr.get('thumbnail') or '/static/images/vinyl.png',
+                'duration': curr.get('duration', 0),
+                'artist': curr.get('artist', 'SoundCloud'),
+                'uploader': curr.get('artist', 'SoundCloud'),
+                'requester': curr.get('requester', 'Discord User'),
+                'is_url': curr.get('is_url', False),
+                'elapsed': elapsed,
+                'is_playing': is_playing,
+                'is_paused': is_paused,
+                'volume': curr_volume,
+            }
+
+        queue_list = []
+        for i, t in enumerate(self.queues.get(guild_id, [])):
+            queue_list.append({
+                'index': i,
+                'title': t.get('title', 'Unknown Track'),
+                'url': t.get('url', ''),
+                'webpage_url': t.get('webpage_url', ''),
+                'thumbnail': t.get('thumbnail') or '/static/images/vinyl.png',
+                'duration': t.get('duration', 0),
+                'artist': t.get('artist', 'SoundCloud'),
+                'uploader': t.get('artist', 'SoundCloud'),
+                'requester': t.get('requester', 'Discord User'),
+            })
+
+        return {
+            'guild_id': str(guild.id),
+            'id': str(guild.id),
+            'guild_name': guild.name,
+            'name': guild.name,
+            'guild_icon': str(guild.icon.url) if guild.icon else None,
+            'connected': connected,
+            'is_playing': is_playing,
+            'is_paused': is_paused,
+            'voice_channel': {'name': channel_name} if channel_name else None,
+            'volume': curr_volume,
+            'listeners': listeners,
+            'current_track': curr_dict,
+            'queue': queue_list,
+        }
+
+    def get_all_guilds_state(self):
+        """Returns summarized status for all guilds."""
+        results = []
+        for guild in self.bot.guilds:
+            state = self.get_guild_state(guild.id)
+            if state:
+                results.append(state)
+        return results
+
+    async def play_from_web(self, guild_id: int, query: str):
+        guild = self.bot.get_guild(guild_id)
+        if not guild:
+            raise ValueError(f"Guild {guild_id} not found.")
+
+        track_info = await self.extract_track_info(query)
+        if not track_info:
+            raise ValueError("No playable tracks found.")
+
+        voice_client = guild.voice_client
+        if not voice_client:
+            # Look for an active voice channel in this guild
+            for ch in guild.voice_channels:
+                if len(ch.members) > 0:
+                    voice_client = await ch.connect()
+                    break
+            if not voice_client and guild.voice_channels:
+                voice_client = await guild.voice_channels[0].connect()
+
+        if not voice_client:
+            raise ValueError("Bot is not connected to a voice channel in this server.")
+
+        self.queues[guild.id].append(track_info)
+
+        if not voice_client.is_playing() and guild.id not in self.play_loops:
+            self.play_loops[guild.id] = True
+            self.play_next(guild, voice_client)
+
+        return track_info
+
+    def pause_from_web(self, guild_id: int):
+        guild = self.bot.get_guild(guild_id)
+        if not guild or not guild.voice_client:
+            return False, "Not connected to voice."
+        vc = guild.voice_client
+        if vc.is_playing():
+            vc.pause()
+            return True, "Paused"
+        elif vc.is_paused():
+            vc.resume()
+            return True, "Resumed"
+        return False, "Not playing or paused."
+
+    def skip_from_web(self, guild_id: int):
+        guild = self.bot.get_guild(guild_id)
+        if not guild or not guild.voice_client:
+            return False, "Not connected to voice."
+        vc = guild.voice_client
+        if vc.is_playing() or vc.is_paused():
+            vc.stop()
+            return True, "Skipped current track."
+        return False, "No track is playing."
+
+    def stop_from_web(self, guild_id: int):
+        guild = self.bot.get_guild(guild_id)
+        if not guild or not guild.voice_client:
+            return False, "Not connected to voice."
+        vc = guild.voice_client
+        self.queues[guild.id].clear()
+        self.play_loops.pop(guild.id, None)
+        self.current_tracks.pop(guild.id, None)
+        vc.stop()
+        return True, "Stopped playback and cleared queue."
+
+    def set_volume_from_web(self, guild_id: int, volume_pct: int):
+        guild = self.bot.get_guild(guild_id)
+        if not guild:
+            return False, "Guild not found."
+        curr = self.current_tracks.get(guild.id)
+        if curr and curr.get('player'):
+            vol = max(0.0, min(1.0, volume_pct / 100.0))
+            curr['player'].volume = vol
+            return True, f"Volume set to {int(round(vol * 100))}%"
+        return False, "No active track to adjust volume."
+
+    def remove_track_from_web(self, guild_id: int, index: int):
+        guild = self.bot.get_guild(guild_id)
+        if not guild:
+            return False, "Guild not found."
+        q = self.queues.get(guild.id, [])
+        if 0 <= index < len(q):
+            removed = q.pop(index)
+            return True, f"Removed {removed['title']}"
+        return False, "Invalid track index."
+
 
     @app_commands.command(name="play", description="Plays a song from SoundCloud or a direct URL.")
     @app_commands.describe(query="The song to play (URL or SoundCloud search keywords)")
