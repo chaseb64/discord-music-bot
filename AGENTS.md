@@ -28,3 +28,9 @@
 - **Environment Boot:** `pip install -r requirements.txt`
 - **Lavalink Validation (Optional):** `curl http://localhost:2333` (Verifies background server integrity)
 - **Local Testing Loop:** `python src/bot.py`
+
+## Git Workflow, Deployment & Versioning Rules
+- **Automatic Push to Main:** Always automatically stage, commit, and push code changes to the `main` branch upon completing requested edits, fixes, or features so the remote repository is never behind.
+- **Ask Before Versioning / Tagging:** NEVER create or push a new release tag automatically without asking first. After pushing changes to `main`, explicitly ask the user if they would like to cut a new release version (e.g., `v2.4.1` or `v2.5.0`). Only create the tag and trigger release packaging when the user confirms.
+- **MinGit Path on Windows:** Always invoke Git commands on Windows using `& "C:\Users\Chase Brannen\AppData\Local\Programs\MinGit\cmd\git.exe"`.
+
