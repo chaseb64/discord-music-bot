@@ -4,3 +4,11 @@ __pycache__/
 *$py.class
 cookies.txt
 *cookies*.txt
+downloads/
+bin/
+*.mp3
+*.m4a
+*.webm
+*.opus
+*.wav
+*.ogg

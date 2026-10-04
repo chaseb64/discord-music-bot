@@ -12,9 +12,12 @@ from utils.ffmpeg import get_ffmpeg_executable
 # Suppress noise about console usage from errors
 youtube_dl.utils.bug_reports_message = lambda *args, **kwargs: ''
 
+downloads_dir = os.path.abspath('downloads')
+os.makedirs(downloads_dir, exist_ok=True)
+
 ytdl_format_options = {
     'format': 'bestaudio/best',
-    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+    'outtmpl': os.path.join(downloads_dir, '%(extractor)s-%(id)s.%(ext)s'),
     'restrictfilenames': True,
     'noplaylist': True,
     'nocheckcertificate': True,
@@ -37,36 +40,36 @@ if os.path.exists(cookies_path):
     ytdl_format_options['cookiefile'] = cookies_path
 
 ffmpeg_options = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn -b:a 192k',
 }
 
 ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
 
 class YTDLSource(discord.PCMVolumeTransformer):
-    def __init__(self, source, *, data, volume=0.5):
+    def __init__(self, source, *, data, file_path, volume=0.5):
         super().__init__(source, volume)
         self.data = data
+        self.file_path = file_path
         self.title = data.get('title')
         self.url = data.get('url')
 
     @classmethod
-    async def from_url(cls, url, *, loop=None, stream=False):
+    async def from_url(cls, url, *, loop=None):
         loop = loop or asyncio.get_event_loop()
-        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
+        # Always download via Python's native network stack to avoid DNS issues in static FFmpeg
+        data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=True))
 
         if 'entries' in data:
             # take first item from a playlist
             data = data['entries'][0]
 
-        filename = data['url'] if stream else ytdl.prepare_filename(data)
+        file_path = ytdl.prepare_filename(data)
         ffmpeg_executable = get_ffmpeg_executable()
         if not ffmpeg_executable:
             raise RuntimeError(
-                "No working FFmpeg executable found on this system. "
-                "If hosted on Pterodactyl (Alpine Linux), please add 'ffmpeg' to 'Additional Packages' (or 'PACKAGES') in the Startup tab and restart."
+                "No working FFmpeg executable found on this system."
             )
-        return cls(discord.FFmpegPCMAudio(filename, executable=ffmpeg_executable, **ffmpeg_options), data=data)
+        return cls(discord.FFmpegPCMAudio(file_path, executable=ffmpeg_executable, **ffmpeg_options), data=data, file_path=file_path)
 
 class QueuePaginationView(discord.ui.View):
     def __init__(self, queue, page=1):
@@ -129,24 +132,28 @@ class Music(commands.Cog):
     def play_next(self, guild, voice_client):
         if len(self.queues[guild.id]) > 0:
             track = self.queues[guild.id].pop(0)
-
-            # Recreate YTDLSource for the track
-            # This avoids issues if the stream URL expires while waiting in queue
-            asyncio.run_coroutine_threadsafe(self._play_track(guild, voice_client, track['url']), self.bot.loop)
+            asyncio.run_coroutine_threadsafe(self._play_track(guild, voice_client, track), self.bot.loop)
         else:
             self.play_loops.pop(guild.id, None)
 
-    async def _play_track(self, guild, voice_client, url):
+    async def _play_track(self, guild, voice_client, track):
         try:
-            player = await YTDLSource.from_url(url, loop=self.bot.loop, stream=True)
-            voice_client.play(player, after=lambda e: self._on_playback_end(guild, voice_client, e))
+            player = await YTDLSource.from_url(track['url'], loop=self.bot.loop)
+            voice_client.play(player, after=lambda e: self._on_playback_end(guild, voice_client, e, player.file_path))
         except Exception as e:
             print(f"Error playing track: {e}")
             self.play_next(guild, voice_client)
 
-    def _on_playback_end(self, guild, voice_client, error):
+    def _on_playback_end(self, guild, voice_client, error, file_path=None):
         if error:
             print(f'Player error: {error}')
+
+        # Clean up downloaded local file to save container disk space
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
 
         # Increment total streams completed
         if hasattr(self.bot, 'total_streams_completed'):
@@ -185,7 +192,7 @@ class Music(commands.Cog):
                 data = data['entries'][0]
 
             track_info = {
-                'title': data.get('title'),
+                'title': data.get('title') or query,
                 'url': data.get('webpage_url') or data.get('url') or target
             }
 
@@ -235,6 +242,17 @@ class Music(commands.Cog):
             self.play_loops.pop(interaction.guild.id, None)
             voice_client.stop()
             await voice_client.disconnect()
+
+            # Clean up downloads directory
+            if os.path.exists(downloads_dir):
+                for f in os.listdir(downloads_dir):
+                    p = os.path.join(downloads_dir, f)
+                    try:
+                        if os.path.isfile(p):
+                            os.remove(p)
+                    except Exception:
+                        pass
+
             await interaction.response.send_message("Stopped the music, cleared the queue, and disconnected.")
         else:
             await interaction.response.send_message("Not connected to a voice channel.", ephemeral=True)
