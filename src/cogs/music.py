@@ -20,6 +20,17 @@ from utils.lyrics import fetch_lyrics
 # Suppress noise about console usage from errors
 youtube_dl.utils.bug_reports_message = lambda *args, **kwargs: ''
 
+MAX_QUEUE_SIZE = 250
+MAX_QUERY_LENGTH = 500
+
+def sanitize_query(query: str) -> str:
+    """Sanitizes and truncates query strings from user inputs."""
+    if not query:
+        return ""
+    # Strip dangerous control characters and trailing/leading spaces
+    clean = re.sub(r'[\r\n\t]', ' ', str(query)).strip()
+    return clean[:MAX_QUERY_LENGTH]
+
 downloads_dir = os.path.abspath('downloads')
 uploads_dir = os.path.join(downloads_dir, 'uploads')
 os.makedirs(downloads_dir, exist_ok=True)
@@ -540,10 +551,15 @@ class Music(commands.Cog):
 
     async def extract_track_info(self, query: str):
         """Extracts metadata and direct streamable info for a track or query."""
-        if query.startswith(('http://', 'https://', 'scsearch:', 'ytsearch:')):
-            target = query
+        clean_q = sanitize_query(query)
+        if not clean_q:
+            return None
+
+        if clean_q.startswith(('http://', 'https://', 'scsearch:', 'ytsearch:')):
+            target = clean_q
         else:
-            target = f"scsearch5:{query}"
+            target = f"scsearch5:{clean_q}"
+        query = clean_q
 
         search_opts = {
             'quiet': True,
@@ -827,6 +843,9 @@ class Music(commands.Cog):
         if not guild:
             raise ValueError(f"Guild {guild_id} not found.")
 
+        if len(self.queues[guild.id]) >= MAX_QUEUE_SIZE:
+            raise ValueError(f"Queue is full (maximum {MAX_QUEUE_SIZE} tracks allowed).")
+
         track_info = await self.extract_track_info(query)
         if not track_info:
             raise ValueError("No playable tracks found.")
@@ -862,6 +881,9 @@ class Music(commands.Cog):
         guild = self.bot.get_guild(guild_id)
         if not guild:
             raise ValueError(f"Guild {guild_id} not found.")
+
+        if len(self.queues[guild.id]) >= MAX_QUEUE_SIZE:
+            raise ValueError(f"Queue is full (maximum {MAX_QUEUE_SIZE} tracks allowed).")
 
         duration = probe_audio_duration(file_path)
         clean_name = os.path.splitext(original_filename)[0]
@@ -967,9 +989,15 @@ class Music(commands.Cog):
         guild = self.bot.get_guild(guild_id)
         if not guild:
             return False, "Guild not found."
+        try:
+            vol_val = int(volume_pct)
+        except (ValueError, TypeError):
+            return False, "Invalid volume percentage format."
+
+        vol_val = max(0, min(200, vol_val))  # Bound between 0% and 200%
         curr = self.current_tracks.get(guild.id)
         if curr and curr.get('player'):
-            vol = max(0.0, min(1.0, volume_pct / 100.0))
+            vol = vol_val / 100.0
             curr['player'].volume = vol
             return True, f"Volume set to {int(round(vol * 100))}%"
         return False, "No active track to adjust volume."
@@ -1131,6 +1159,10 @@ class Music(commands.Cog):
     async def play(self, interaction: discord.Interaction, query: str):
         if not interaction.user.voice:
             await interaction.response.send_message("You are not connected to a voice channel.", ephemeral=True)
+            return
+
+        if len(self.queues[interaction.guild.id]) >= MAX_QUEUE_SIZE:
+            await interaction.response.send_message(f"The queue is full (maximum {MAX_QUEUE_SIZE} tracks allowed).", ephemeral=True)
             return
 
         channel = interaction.user.voice.channel

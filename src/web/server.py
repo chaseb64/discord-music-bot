@@ -173,11 +173,12 @@ class WebDashboard:
             return web.json_response({'error': str(e)}, status=500)
 
     async def handle_api_upload(self, request):
-        """Processes multipart form uploads of user MP3/audio files."""
+        """Processes multipart form uploads of user MP3/audio files securely."""
         music_cog = self.get_music_cog()
         if not music_cog:
             return web.json_response({'error': 'Music system not ready'}, status=503)
 
+        allowed_extensions = {'.mp3', '.wav', '.ogg', '.flac', '.m4a', '.webm', '.opus'}
         reader = await request.multipart()
         guild_id = None
         saved_file_path = None
@@ -193,27 +194,43 @@ class WebDashboard:
             if part.name == 'guild_id':
                 guild_id = (await part.text()).strip()
             elif part.name == 'file':
-                orig_filename = part.filename or "uploaded_track.mp3"
-                clean_name = re.sub(r'[^a-zA-Z0-9_\-\. ]', '_', orig_filename)
+                raw_filename = os.path.basename(part.filename or "uploaded_track.mp3")
+                ext = os.path.splitext(raw_filename)[1].lower()
+                if ext not in allowed_extensions:
+                    return web.json_response({'error': f'Unsupported file extension "{ext}". Allowed: {", ".join(sorted(allowed_extensions))}'}, status=400)
+
+                orig_filename = raw_filename
+                clean_name = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', raw_filename)
                 dest = os.path.join(uploads_dir, f"{int(time.time())}_{clean_name}")
-                with open(dest, 'wb') as f:
+                dest_abs = os.path.abspath(dest)
+
+                # Prevent Path Traversal
+                if os.path.commonpath([dest_abs, uploads_dir]) != uploads_dir:
+                    return web.json_response({'error': 'Invalid destination file path.'}, status=400)
+
+                with open(dest_abs, 'wb') as f:
                     while True:
                         chunk = await part.read_chunk()
                         if not chunk:
                             break
                         f.write(chunk)
-                saved_file_path = dest
+                saved_file_path = dest_abs
 
         if not guild_id or not saved_file_path:
             return web.json_response({'error': 'guild_id and file are required.'}, status=400)
 
         try:
-            track = await music_cog.play_local_file(int(guild_id), saved_file_path, orig_filename)
+            guild_id_int = int(guild_id)
+        except (ValueError, TypeError):
+            return web.json_response({'error': 'Invalid guild_id'}, status=400)
+
+        try:
+            track = await music_cog.play_local_file(guild_id_int, saved_file_path, orig_filename)
             await self.broadcast_update()
             return web.json_response({'success': True, 'track': track})
         except Exception as e:
             _log.error(f"Error handling upload: {e}")
-            return web.json_response({'error': str(e)}, status=500)
+            return web.json_response({'error': str(e)}, status=400 if isinstance(e, ValueError) else 500)
 
     async def handle_api_skip(self, request):
         try:
