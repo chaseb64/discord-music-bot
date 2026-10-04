@@ -264,7 +264,10 @@ class YTDLSource(discord.PCMVolumeTransformer):
     @classmethod
     async def download_track(cls, url: str, *, fallback_urls: list = None, title: str = None, loop=None) -> tuple[str, dict]:
         """Downloads audio stream to downloads/ directory with multi-candidate resilience and returns (file_path, data) tuple."""
-        loop = loop or asyncio.get_event_loop()
+        try:
+            loop = loop or asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
 
         def _do_download():
             urls_to_try = [url] + (list(fallback_urls) if fallback_urls else [])

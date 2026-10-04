@@ -1,7 +1,11 @@
 import unittest
 from unittest.mock import patch, MagicMock
 import os
+import sys
 import asyncio
+
+# Ensure src directory is in sys.path
+sys.path.insert(0, os.path.abspath('src'))
 
 from cogs.music import YTDLSource
 
@@ -74,9 +78,8 @@ class TestDownloadTrack(unittest.TestCase):
     @patch.object(YTDLSource, '_extract_first_entry', side_effect=lambda d: d)
     @patch.object(YTDLSource, '_try_download_candidates', return_value=(('https://example.com/track', {'id': 'abc'}), None))
     def test_download_track_async(self, mock_candidates, mock_extract, mock_resolve):
-        loop = asyncio.get_event_loop()
-        file_path, data = loop.run_until_complete(
-            YTDLSource.download_track('https://example.com/track', loop=loop)
+        file_path, data = asyncio.run(
+            YTDLSource.download_track('https://example.com/track')
         )
         self.assertEqual(file_path, '/tmp/song.mp3')
         self.assertEqual(data, {'id': 'abc'})

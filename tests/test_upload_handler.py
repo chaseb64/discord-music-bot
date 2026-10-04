@@ -1,11 +1,16 @@
 import asyncio
 import os
+import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock, AsyncMock
 import aiohttp
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
+
+# Ensure src directory is in sys.path
+sys.path.insert(0, os.path.abspath('src'))
+
 from web.server import WebDashboard
 
 class TestWebDashboardUpload(AioHTTPTestCase):
