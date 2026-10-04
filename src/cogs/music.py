@@ -1,6 +1,8 @@
 import asyncio
 import os
 import shutil
+import subprocess
+import traceback
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -14,6 +16,8 @@ youtube_dl.utils.bug_reports_message = lambda *args, **kwargs: ''
 
 downloads_dir = os.path.abspath('downloads')
 os.makedirs(downloads_dir, exist_ok=True)
+
+ffmpeg_bin = get_ffmpeg_executable()
 
 ytdl_format_options = {
     'format': 'bestaudio/best',
@@ -35,12 +39,15 @@ ytdl_format_options = {
     },
 }
 
+if ffmpeg_bin:
+    ytdl_format_options['ffmpeg_location'] = ffmpeg_bin
+
 cookies_path = os.getenv('YTDL_COOKIES_FILE', 'cookies.txt')
 if os.path.exists(cookies_path):
     ytdl_format_options['cookiefile'] = cookies_path
 
 ffmpeg_options = {
-    'options': '-vn -b:a 192k',
+    'options': '-vn',
 }
 
 ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
@@ -53,6 +60,11 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.title = data.get('title')
         self.url = data.get('url')
 
+    @property
+    def _current_error(self):
+        """Forward underlying FFmpeg error so AudioPlayer can report it to after callback."""
+        return getattr(self.original, '_current_error', None)
+
     @classmethod
     async def from_url(cls, url, *, loop=None):
         loop = loop or asyncio.get_event_loop()
@@ -60,15 +72,41 @@ class YTDLSource(discord.PCMVolumeTransformer):
         data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=True))
 
         if 'entries' in data:
-            # take first item from a playlist
-            data = data['entries'][0]
+            valid_entries = [e for e in data['entries'] if e]
+            if not valid_entries:
+                raise RuntimeError("No valid entries found for this track/playlist.")
+            data = valid_entries[0]
 
-        file_path = ytdl.prepare_filename(data)
+        # Locate actual downloaded file
+        file_path = None
+        if 'requested_downloads' in data and len(data['requested_downloads']) > 0:
+            file_path = data['requested_downloads'][0].get('filepath')
+        if not file_path or not os.path.exists(file_path):
+            file_path = ytdl.prepare_filename(data)
+
+        # Fallback check inside downloads directory by ID
+        if not os.path.exists(file_path):
+            track_id = str(data.get('id', ''))
+            for f in os.listdir(downloads_dir):
+                if track_id and track_id in f:
+                    file_path = os.path.join(downloads_dir, f)
+                    break
+
+        if not file_path or not os.path.exists(file_path):
+            raise FileNotFoundError(f"Downloaded audio file not found on disk at {file_path}")
+
         ffmpeg_executable = get_ffmpeg_executable()
         if not ffmpeg_executable:
-            raise RuntimeError(
-                "No working FFmpeg executable found on this system."
-            )
+            raise RuntimeError("No working FFmpeg executable found on this system.")
+
+        # Pre-flight check: verify that FFmpeg can decode this audio file
+        test_cmd = [ffmpeg_executable, '-i', file_path, '-t', '0.5', '-f', 'null', '-']
+        test_proc = subprocess.run(test_cmd, capture_output=True, text=True)
+        if test_proc.returncode != 0:
+            print(f"[FFmpeg Decode Error] returncode={test_proc.returncode}")
+            print(f"[FFmpeg Stderr]: {test_proc.stderr}")
+            raise RuntimeError(f"FFmpeg failed to decode audio (code {test_proc.returncode}): {test_proc.stderr.strip()[:200]}")
+
         return cls(discord.FFmpegPCMAudio(file_path, executable=ffmpeg_executable, **ffmpeg_options), data=data, file_path=file_path)
 
 class QueuePaginationView(discord.ui.View):
@@ -141,12 +179,13 @@ class Music(commands.Cog):
             player = await YTDLSource.from_url(track['url'], loop=self.bot.loop)
             voice_client.play(player, after=lambda e: self._on_playback_end(guild, voice_client, e, player.file_path))
         except Exception as e:
-            print(f"Error playing track: {e}")
+            print(f"Error playing track ({type(e).__name__}): {e}")
+            traceback.print_exc()
             self.play_next(guild, voice_client)
 
     def _on_playback_end(self, guild, voice_client, error, file_path=None):
         if error:
-            print(f'Player error: {error}')
+            print(f'Player error ({type(error).__name__}): {error}')
 
         # Clean up downloaded local file to save container disk space
         if file_path and os.path.exists(file_path):
@@ -180,16 +219,30 @@ class Music(commands.Cog):
             await voice_client.move_to(channel)
 
         try:
-            # If not a direct URL, search SoundCloud
-            target = query if query.startswith(('http://', 'https://', 'scsearch:', 'ytsearch:')) else f"scsearch:{query}"
+            # If not a direct URL, search SoundCloud with top 5 results to skip DRM/preview tracks
+            if query.startswith(('http://', 'https://', 'scsearch:', 'ytsearch:')):
+                target = query
+            else:
+                target = f"scsearch5:{query}"
 
-            # We just extract info first to get title/url to add to queue
-            # We don't build the player until it's time to play, to prevent URL expiry
+            # Extract metadata with ignoreerrors=True so DRM preview tracks don't crash search
+            search_opts = dict(ytdl_format_options)
+            search_opts['ignoreerrors'] = True
+            search_ytdl = youtube_dl.YoutubeDL(search_opts)
+
             loop = self.bot.loop or asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(target, download=False))
+            data = await loop.run_in_executor(None, lambda: search_ytdl.extract_info(target, download=False))
+
+            if not data:
+                await interaction.followup.send("No results found for that search.")
+                return
 
             if 'entries' in data:
-                data = data['entries'][0]
+                valid_entries = [e for e in data['entries'] if e]
+                if not valid_entries:
+                    await interaction.followup.send("No playable tracks found for this search.")
+                    return
+                data = valid_entries[0]
 
             track_info = {
                 'title': data.get('title') or query,
@@ -205,6 +258,7 @@ class Music(commands.Cog):
                 self.play_next(interaction.guild, voice_client)
 
         except Exception as e:
+            traceback.print_exc()
             await interaction.followup.send(f"An error occurred: {str(e)}")
 
     @app_commands.command(name="queue", description="Shows the current music queue.")
@@ -259,3 +313,4 @@ class Music(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Music(bot))
+

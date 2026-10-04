@@ -27,6 +27,17 @@ def main():
     except Exception as e:
         print(f"[FFmpeg] Verification note: {e}")
 
+    # Clean up downloads directory on startup
+    downloads_dir = os.path.abspath('downloads')
+    if os.path.exists(downloads_dir):
+        for f in os.listdir(downloads_dir):
+            p = os.path.join(downloads_dir, f)
+            try:
+                if os.path.isfile(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
     # Run the bot
     print("Starting the bot...")
     subprocess.check_call([sys.executable, "src/bot.py"])
