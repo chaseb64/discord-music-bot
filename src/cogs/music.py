@@ -39,6 +39,13 @@ ytdl_format_options = {
     'no_warnings': True,
     'default_search': 'scsearch',  # Search SoundCloud by default when no URL given
     'source_address': '0.0.0.0',  # bind to ipv4
+    'http_headers': {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+    },
+    'retries': 5,
+    'fragment_retries': 5,
     'extractor_args': {
         'youtube': {
             'player_client': ['android', 'ios'],
@@ -232,7 +239,8 @@ class Music(commands.Cog):
         # Internal flag to prevent play_next triggering during mid-stream seek/filter restarts
         self.is_switching = {}
         # History of played titles and URLs per guild to avoid Autoplay looping/repeats
-        self.played_history = defaultdict(lambda: deque(maxlen=60))
+        self.played_urls = defaultdict(lambda: deque(maxlen=80))
+        self.played_titles = defaultdict(lambda: deque(maxlen=80))
         # Active pre-buffering tasks per guild
         self.prebuffering_tasks = {}
 
@@ -267,42 +275,66 @@ class Music(commands.Cog):
             track['is_downloading'] = False
 
     async def _recommend_related_track(self, guild_id: int, current_track: dict) -> dict | None:
-        """Smart recommendation engine: queries SoundCloud/YouTube for related tracks avoiding played history."""
+        """Smart recommendation engine: queries SoundCloud for related tracks avoiding played history."""
         if not current_track:
             return None
 
         artist = current_track.get('artist') or current_track.get('uploader') or ''
         raw_title = current_track.get('title') or ''
 
-        # Strip common video/upload noise from title for higher quality search
+        # Strip common noise from title for higher quality search
         clean_title = re.sub(r'\(.*?\)|\[.*?\]', '', raw_title)
         clean_title = re.sub(r'(?i)\b(official\s+video|official\s+audio|lyrics|lyric\s+video|ft\.?|feat\.?|remix|hd|4k)\b', '', clean_title).strip()
+        clean_title = re.sub(r'[^\w\s-]', '', clean_title).strip()
         if not clean_title:
             clean_title = raw_title.strip()
 
-        is_generic_artist = not artist or artist.lower() in ('soundcloud', 'youtube', 'unknown', 'various artists')
-        
+        is_generic_artist = not artist or artist.lower() in ('soundcloud', 'youtube', 'unknown', 'various artists', 'custom upload')
+        clean_artist = re.sub(r'[^\w\s-]', '', artist).strip()
+
         search_queries = []
-        if not is_generic_artist:
-            search_queries.append(f"scsearch8:{artist} {clean_title} related")
-            search_queries.append(f"scsearch8:{artist} music")
-        else:
-            search_queries.append(f"scsearch8:{clean_title} related")
-            search_queries.append(f"scsearch8:{clean_title} music")
+        if not is_generic_artist and clean_artist:
+            search_queries.append(f"scsearch5:{clean_artist}")
+            if clean_title:
+                search_queries.append(f"scsearch5:{clean_artist} {clean_title}")
+        elif clean_title:
+            search_queries.append(f"scsearch5:{clean_title}")
 
-        search_queries.append(f"ytsearch5:{artist} {clean_title} music" if not is_generic_artist else f"ytsearch5:{clean_title} music")
+        # Reliable fallback queries if artist/title searches fail or are already played
+        fallback_queries = [
+            "scsearch5:popular chill hits",
+            "scsearch5:lofi hip hop radio",
+            "scsearch5:ambient electronic music",
+        ]
 
-        history = self.played_history[guild_id]
+        played_urls = set(self.played_urls[guild_id])
+        played_titles = set(self.played_titles[guild_id])
         queued_urls = {t.get('url') for t in self.queues[guild_id] if t.get('url')}
-        queued_titles = {t.get('title', '').lower() for t in self.queues[guild_id]}
+        queued_titles = {re.sub(r'[^a-zA-Z0-9\s]', '', t.get('title', '')).strip().lower() for t in self.queues[guild_id]}
         current_url = current_track.get('url')
 
-        search_opts = dict(ytdl_format_options)
-        search_opts['ignoreerrors'] = True
+        # Fast flat extraction - prevents downloading child JSON metadata during search to avoid 403 Forbidden
+        search_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': True,
+            'skip_download': True,
+            'ignoreerrors': True,
+            'nocheckcertificate': True,
+            'default_search': 'scsearch',
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+            }
+        }
         search_ytdl = youtube_dl.YoutubeDL(search_opts)
         loop = self.bot.loop or asyncio.get_event_loop()
 
-        for query in search_queries:
+        all_queries = search_queries + fallback_queries
+        candidate_pool = []
+
+        for query in all_queries:
             try:
                 data = await loop.run_in_executor(None, lambda q=query: search_ytdl.extract_info(q, download=False))
                 if not data or 'entries' not in data:
@@ -312,16 +344,19 @@ class Music(commands.Cog):
                 for entry in entries:
                     cand_url = entry.get('webpage_url') or entry.get('url')
                     cand_title = entry.get('title') or ''
-                    cand_title_lower = cand_title.lower()
                     duration = entry.get('duration') or 0
 
                     if not cand_url or cand_url == current_url or cand_url in queued_urls:
                         continue
-                    if cand_title_lower in queued_titles:
-                        continue
-                    if cand_url in history or any(h.lower() in cand_title_lower or cand_title_lower in h.lower() for h in history):
-                        continue
                     if duration and (duration < 40 or duration > 900):
+                        continue
+
+                    candidate_pool.append(entry)
+
+                    cand_clean = re.sub(r'[^a-zA-Z0-9\s]', '', cand_title).strip().lower()
+                    if cand_url in played_urls or (cand_clean and cand_clean in played_titles):
+                        continue
+                    if cand_clean and cand_clean in queued_titles:
                         continue
 
                     thumbnail = entry.get('thumbnail')
@@ -341,8 +376,28 @@ class Music(commands.Cog):
                         'is_autoplay': True,
                     }
             except Exception as e:
-                print(f"[Autoplay] Search query '{query}' notice: {e}")
+                print(f"[Autoplay] Search notice for '{query}': {e}")
                 continue
+
+        # If every candidate matched played history, reuse the best valid non-duplicate entry from the pool
+        for entry in candidate_pool:
+            cand_url = entry.get('webpage_url') or entry.get('url')
+            if cand_url and cand_url != current_url and cand_url not in queued_urls:
+                thumbnail = entry.get('thumbnail')
+                if not thumbnail and entry.get('thumbnails'):
+                    thumbnail = entry['thumbnails'][-1].get('url')
+                return {
+                    'title': entry.get('title', 'Autoplay Track'),
+                    'url': cand_url,
+                    'webpage_url': cand_url,
+                    'thumbnail': thumbnail or '/static/images/vinyl.png',
+                    'duration': entry.get('duration') or 0,
+                    'artist': entry.get('uploader') or 'Autoplay Radio',
+                    'uploader': entry.get('uploader') or 'Autoplay Recommendation',
+                    'requester': '⚡ Autoplay',
+                    'is_local': False,
+                    'is_autoplay': True,
+                }
 
         return None
 
@@ -370,17 +425,29 @@ class Music(commands.Cog):
                 if settings.get('autoplay', False):
                     curr = self.current_tracks.get(guild_id)
                     if curr:
-                        rec = await self._recommend_related_track(guild_id, curr)
-                        if rec:
-                            # Re-verify queue is still empty in case user queued a song during search
+                        # Try up to 3 recommendations in case one fails to prebuffer (e.g. removed or geoblocked)
+                        for attempt in range(3):
+                            if len(self.queues[guild_id]) > 0:
+                                break
+                            rec = await self._recommend_related_track(guild_id, curr)
+                            if not rec:
+                                break
                             if len(self.queues[guild_id]) == 0:
                                 self.queues[guild_id].append(rec)
                                 print(f"[Autoplay] Pre-queued upcoming track: '{rec['title']}'. Starting pre-download...")
                                 if hasattr(self.bot, 'web_dashboard') and self.bot.web_dashboard:
                                     asyncio.create_task(self.bot.web_dashboard.broadcast_update())
-                                await self.prebuffer_track(rec)
+                                success = await self.prebuffer_track(rec)
+                                if not success:
+                                    if rec in self.queues[guild_id]:
+                                        self.queues[guild_id].remove(rec)
+                                    print(f"[Autoplay] Pre-buffer failed for '{rec['title']}'. Retrying next recommendation...")
+                                    continue
+                                else:
+                                    break
                             else:
                                 await self.prebuffer_track(self.queues[guild_id][0])
+                                break
             except Exception as e:
                 print(f"[Pre-Buffer] Worker error in guild {guild_id}: {e}")
 
@@ -394,8 +461,20 @@ class Music(commands.Cog):
         else:
             target = f"scsearch5:{query}"
 
-        search_opts = dict(ytdl_format_options)
-        search_opts['ignoreerrors'] = True
+        search_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': True,
+            'skip_download': True,
+            'ignoreerrors': True,
+            'nocheckcertificate': True,
+            'default_search': 'scsearch',
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+            }
+        }
         search_ytdl = youtube_dl.YoutubeDL(search_opts)
 
         loop = self.bot.loop or asyncio.get_event_loop()
@@ -440,9 +519,11 @@ class Music(commands.Cog):
 
             # Record track in played history to prevent Autoplay duplicate repetitions
             if track.get('title'):
-                self.played_history[guild.id].append(track['title'])
+                norm_title = re.sub(r'[^a-zA-Z0-9\s]', '', track['title']).strip().lower()
+                if norm_title:
+                    self.played_titles[guild.id].append(norm_title)
             if track.get('url'):
-                self.played_history[guild.id].append(track['url'])
+                self.played_urls[guild.id].append(track['url'])
 
             # If background download is currently in progress, wait for it to complete
             if track.get('is_downloading'):
