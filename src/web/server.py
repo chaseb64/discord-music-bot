@@ -213,7 +213,7 @@ class WebDashboard:
                         chunk = await part.read_chunk()
                         if not chunk:
                             break
-                        f.write(chunk)
+                        await asyncio.to_thread(f.write, chunk)
                 saved_file_path = dest_abs
 
         if not guild_id or not saved_file_path:
