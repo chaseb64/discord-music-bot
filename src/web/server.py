@@ -69,6 +69,12 @@ class WebDashboard:
         ping = int(round(self.bot.latency * 1000)) if (self.bot.latency and self.bot.latency != float('inf')) else 0
         streams = getattr(self.bot, 'total_streams_completed', 0)
 
+        try:
+            from version import get_release_info
+            rel = get_release_info()
+        except Exception:
+            rel = {'version': '2.4.0', 'tag': 'v2.4.0', 'codename': 'Valkyrie', 'commit': 'main', 'date': ''}
+
         return {
             'uptime_str': uptime_str,
             'uptime_seconds': uptime_seconds,
@@ -84,6 +90,8 @@ class WebDashboard:
             'ping_ms': ping,
             'ping': ping,
             'guild_count': len(self.bot.guilds),
+            'release': rel,
+            'version': rel['tag'],
         }
 
     async def handle_index(self, request):
@@ -102,9 +110,17 @@ class WebDashboard:
             'avatar': str(self.bot.user.display_avatar.url) if (self.bot.user and self.bot.user.display_avatar) else "/static/images/logo.png",
         }
 
+        try:
+            from version import get_release_info
+            rel = get_release_info()
+        except Exception:
+            rel = {'version': '2.4.0', 'tag': 'v2.4.0', 'codename': 'Valkyrie', 'commit': 'main', 'date': ''}
+
         data = {
             'online': True,
             'bot': bot_user,
+            'release': rel,
+            'version': rel['tag'],
             'metrics': self.get_system_metrics(),
             'guilds': guilds_state,
         }

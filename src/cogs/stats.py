@@ -29,8 +29,16 @@ class Stats(commands.Cog):
         # Get total streams completed from bot
         total_streams = getattr(self.bot, 'total_streams_completed', 0)
 
+        try:
+            from version import get_release_info
+            rel = get_release_info()
+            ver_text = f"**{rel['tag']}** [{rel['codename']}]"
+        except Exception:
+            ver_text = "**v2.4.0**"
+
         # Build embed
         embed = discord.Embed(title="Bot Statistics & Resources", color=discord.Color.blue())
+        embed.add_field(name="Release Version", value=ver_text, inline=False)
         embed.add_field(name="Uptime", value=uptime_str, inline=False)
         embed.add_field(name="CPU Usage", value=f"{cpu_usage}%", inline=True)
         embed.add_field(name="RAM Usage", value=f"{ram_usage}% ({ram_used}GB / {ram_total}GB)", inline=True)

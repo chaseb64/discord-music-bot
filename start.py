@@ -12,13 +12,30 @@ def main():
     except Exception:
         pass
 
+    try:
+        from version import get_release_info
+        rel = get_release_info()
+        print(f"===================================================================")
+        print(f"  [Startup] Aether Beats {rel['tag']} [{rel['codename']}]")
+        print(f"===================================================================")
+    except Exception:
+        pass
+
     # Auto-sync latest code from GitHub if .git directory exists
     if os.path.exists('.git'):
         try:
             print("[Auto-Sync] Pulling latest code from GitHub...")
             res = subprocess.run(["git", "pull", "--ff-only"], capture_output=True, text=True, timeout=10)
             if res.returncode == 0:
-                print(f"[Auto-Sync] Code up-to-date: {res.stdout.strip()}")
+                print(f"[Auto-Sync] Git pull: {res.stdout.strip()}")
+                try:
+                    import importlib
+                    import version
+                    importlib.reload(version)
+                    rel = version.get_release_info()
+                    print(f"[Release] Active Build: {rel['tag']} • Date: {rel['date'] or 'N/A'}")
+                except Exception:
+                    pass
             else:
                 print(f"[Auto-Sync] Git pull notice: {res.stderr.strip()}")
         except Exception as e:

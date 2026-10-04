@@ -100,6 +100,8 @@
   const statPing = document.getElementById('statPing');
   const statStreams = document.getElementById('statStreams');
   const statGuilds = document.getElementById('statGuilds');
+  const appVersionBadge = document.getElementById('appVersionBadge');
+  const vitalsReleaseText = document.getElementById('vitalsReleaseText');
 
   const channelPill = document.getElementById('channelPill');
   const channelName = document.getElementById('channelName');
@@ -507,6 +509,10 @@
     if (statPing) statPing.textContent = `${ping} ms`;
     if (statStreams) statStreams.textContent = streams;
     if (statGuilds) statGuilds.textContent = guilds;
+
+    const versionTag = (stats.release && stats.release.tag) || stats.version || 'v2.4.0';
+    if (appVersionBadge) appVersionBadge.textContent = versionTag;
+    if (vitalsReleaseText) vitalsReleaseText.textContent = `Aether Beats ${versionTag}`;
   }
 
   // --- Smooth Progress Bar & Scrubber Ticker ---

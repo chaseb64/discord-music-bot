@@ -68,6 +68,12 @@ def print_banner(port: int = 25567):
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     os_name = f"{platform.system()} {platform.machine()}"
 
+    try:
+        from version import get_release_info
+        rel = get_release_info()
+    except Exception:
+        rel = {"version": "2.4.0", "tag": "v2.4.0", "codename": "Valkyrie", "commit": ""}
+
     lines = [
         "",
         rf"{cyan}                 .------------------------.                 {rst}",
@@ -86,6 +92,7 @@ def print_banner(port: int = 25567):
         "",
         rf"{blurple}  ==================================================================={rst}",
         rf"  {bold}{white}AETHER BEATS{rst} {dim}::{rst} {pink}Pro Discord Audio Engine & Command Center{rst}",
+        rf"  {cyan}> Release Build :{rst} {yellow}{bold}{rel['tag']}{rst} {dim}[{rel['codename']} Edition]{rst}",
         rf"{blurple}  ==================================================================={rst}",
         rf"  {cyan}> Web Dashboard :{rst} {green}http://localhost:{port}{rst} {dim}(Bound to 0.0.0.0:{port}){rst}",
         rf"  {cyan}> Audio Core    :{rst} FFmpeg {dim}(192k Stereo PCM){rst} + Hardware Opus",
