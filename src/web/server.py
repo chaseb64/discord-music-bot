@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import asyncio
 import json
@@ -11,14 +12,15 @@ _log = logging.getLogger("web.dashboard")
 class WebDashboard:
     def __init__(self, bot):
         self.bot = bot
-        self.app = web.Application()
+        # Allow up to 100MB for direct MP3 audio file uploads
+        self.app = web.Application(client_max_size=100 * 1024 * 1024)
         self.websockets = set()
         self.broadcast_task = None
         self.visualizer_task = None
         self.setup_routes()
 
     def setup_routes(self):
-        # API Routes
+        # Core API routes
         self.app.router.add_get('/', self.handle_index)
         self.app.router.add_get('/api/status', self.handle_api_status)
         self.app.router.add_get('/api/guild/{guild_id}', self.handle_api_guild)
@@ -28,6 +30,17 @@ class WebDashboard:
         self.app.router.add_post('/api/stop', self.handle_api_stop)
         self.app.router.add_post('/api/volume', self.handle_api_volume)
         self.app.router.add_post('/api/queue/remove', self.handle_api_queue_remove)
+
+        # Extended Feature routes: Audio FX, Seeking, Looping, Autoplay, Shuffle, Lyrics, MP3 Upload
+        self.app.router.add_post('/api/filter', self.handle_api_filter)
+        self.app.router.add_post('/api/seek', self.handle_api_seek)
+        self.app.router.add_post('/api/loop', self.handle_api_loop)
+        self.app.router.add_post('/api/autoplay', self.handle_api_autoplay)
+        self.app.router.add_post('/api/shuffle', self.handle_api_shuffle)
+        self.app.router.add_post('/api/queue/move', self.handle_api_queue_move)
+        self.app.router.add_get('/api/lyrics', self.handle_api_lyrics)
+        self.app.router.add_post('/api/upload', self.handle_api_upload)
+
         self.app.router.add_get('/ws', self.handle_websocket)
 
         # Static files
@@ -137,6 +150,49 @@ class WebDashboard:
         except Exception as e:
             return web.json_response({'error': str(e)}, status=500)
 
+    async def handle_api_upload(self, request):
+        """Processes multipart form uploads of user MP3/audio files."""
+        music_cog = self.get_music_cog()
+        if not music_cog:
+            return web.json_response({'error': 'Music system not ready'}, status=503)
+
+        reader = await request.multipart()
+        guild_id = None
+        saved_file_path = None
+        orig_filename = "uploaded_track.mp3"
+
+        uploads_dir = os.path.abspath(os.path.join('downloads', 'uploads'))
+        os.makedirs(uploads_dir, exist_ok=True)
+
+        while True:
+            part = await reader.next()
+            if part is None:
+                break
+            if part.name == 'guild_id':
+                guild_id = (await part.text()).strip()
+            elif part.name == 'file':
+                orig_filename = part.filename or "uploaded_track.mp3"
+                clean_name = re.sub(r'[^a-zA-Z0-9_\-\. ]', '_', orig_filename)
+                dest = os.path.join(uploads_dir, f"{int(time.time())}_{clean_name}")
+                with open(dest, 'wb') as f:
+                    while True:
+                        chunk = await part.read_chunk()
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                saved_file_path = dest
+
+        if not guild_id or not saved_file_path:
+            return web.json_response({'error': 'guild_id and file are required.'}, status=400)
+
+        try:
+            track = await music_cog.play_local_file(int(guild_id), saved_file_path, orig_filename)
+            await self.broadcast_update()
+            return web.json_response({'success': True, 'track': track})
+        except Exception as e:
+            _log.error(f"Error handling upload: {e}")
+            return web.json_response({'error': str(e)}, status=500)
+
     async def handle_api_skip(self, request):
         try:
             body = await request.json()
@@ -149,8 +205,10 @@ class WebDashboard:
             return web.json_response({'error': 'Music system not ready'}, status=503)
 
         success, msg = music_cog.skip_from_web(guild_id)
-        await self.broadcast_update()
-        return web.json_response({'success': success, 'message': msg})
+        if success:
+            await self.broadcast_update()
+            return web.json_response({'success': True, 'message': msg})
+        return web.json_response({'error': msg}, status=400)
 
     async def handle_api_pause(self, request):
         try:
@@ -164,8 +222,10 @@ class WebDashboard:
             return web.json_response({'error': 'Music system not ready'}, status=503)
 
         success, msg = music_cog.pause_from_web(guild_id)
-        await self.broadcast_update()
-        return web.json_response({'success': success, 'message': msg})
+        if success:
+            await self.broadcast_update()
+            return web.json_response({'success': True, 'status': msg.lower()})
+        return web.json_response({'error': msg}, status=400)
 
     async def handle_api_stop(self, request):
         try:
@@ -186,17 +246,143 @@ class WebDashboard:
         try:
             body = await request.json()
             guild_id = int(body.get('guild_id'))
-            volume = int(body.get('volume', 50))
+            vol = int(body.get('volume', 100))
         except Exception:
-            return web.json_response({'error': 'Invalid request parameters'}, status=400)
+            return web.json_response({'error': 'Invalid parameters'}, status=400)
 
         music_cog = self.get_music_cog()
         if not music_cog:
             return web.json_response({'error': 'Music system not ready'}, status=503)
 
-        success, msg = music_cog.set_volume_from_web(guild_id, volume)
+        success, msg = music_cog.set_volume_from_web(guild_id, vol)
+        if success:
+            await self.broadcast_update()
+            return web.json_response({'success': True, 'volume': vol})
+        return web.json_response({'error': msg}, status=400)
+
+    async def handle_api_filter(self, request):
+        try:
+            body = await request.json()
+            guild_id = int(body.get('guild_id'))
+            filter_name = str(body.get('filter', 'none')).strip().lower()
+        except Exception:
+            return web.json_response({'error': 'Invalid request body'}, status=400)
+
+        music_cog = self.get_music_cog()
+        if not music_cog:
+            return web.json_response({'error': 'Music system not ready'}, status=503)
+
+        success, msg = await music_cog.apply_filter(guild_id, filter_name)
         await self.broadcast_update()
-        return web.json_response({'success': success, 'message': msg})
+        return web.json_response({'success': success, 'message': msg, 'filter': filter_name})
+
+    async def handle_api_seek(self, request):
+        try:
+            body = await request.json()
+            guild_id = int(body.get('guild_id'))
+            position = float(body.get('position', 0))
+        except Exception:
+            return web.json_response({'error': 'Invalid request body'}, status=400)
+
+        music_cog = self.get_music_cog()
+        if not music_cog:
+            return web.json_response({'error': 'Music system not ready'}, status=503)
+
+        success, msg = await music_cog.seek(guild_id, position)
+        await self.broadcast_update()
+        return web.json_response({'success': success, 'message': msg, 'position': position})
+
+    async def handle_api_loop(self, request):
+        try:
+            body = await request.json()
+            guild_id = int(body.get('guild_id'))
+            mode = str(body.get('mode', 'off')).strip().lower()
+        except Exception:
+            return web.json_response({'error': 'Invalid request body'}, status=400)
+
+        music_cog = self.get_music_cog()
+        if not music_cog:
+            return web.json_response({'error': 'Music system not ready'}, status=503)
+
+        success, msg = music_cog.set_loop_mode(guild_id, mode)
+        await self.broadcast_update()
+        return web.json_response({'success': success, 'message': msg, 'mode': mode})
+
+    async def handle_api_autoplay(self, request):
+        try:
+            body = await request.json()
+            guild_id = int(body.get('guild_id'))
+            enabled = body.get('enabled')
+        except Exception:
+            return web.json_response({'error': 'Invalid request body'}, status=400)
+
+        music_cog = self.get_music_cog()
+        if not music_cog:
+            return web.json_response({'error': 'Music system not ready'}, status=503)
+
+        success, msg = music_cog.toggle_autoplay(guild_id, enabled)
+        await self.broadcast_update()
+        is_enabled = music_cog.guild_settings[guild_id].get('autoplay', False)
+        return web.json_response({'success': success, 'message': msg, 'autoplay': is_enabled})
+
+    async def handle_api_shuffle(self, request):
+        try:
+            body = await request.json()
+            guild_id = int(body.get('guild_id'))
+        except Exception:
+            return web.json_response({'error': 'Invalid request body'}, status=400)
+
+        music_cog = self.get_music_cog()
+        if not music_cog:
+            return web.json_response({'error': 'Music system not ready'}, status=503)
+
+        success, msg = music_cog.shuffle_queue(guild_id)
+        if success:
+            await self.broadcast_update()
+            return web.json_response({'success': True, 'message': msg})
+        return web.json_response({'error': msg}, status=400)
+
+    async def handle_api_queue_move(self, request):
+        try:
+            body = await request.json()
+            guild_id = int(body.get('guild_id'))
+            from_idx = int(body.get('from_index'))
+            to_idx = int(body.get('to_index'))
+        except Exception:
+            return web.json_response({'error': 'Invalid request body'}, status=400)
+
+        music_cog = self.get_music_cog()
+        if not music_cog:
+            return web.json_response({'error': 'Music system not ready'}, status=503)
+
+        success, msg = music_cog.reorder_queue(guild_id, from_idx, to_idx)
+        if success:
+            await self.broadcast_update()
+            return web.json_response({'success': True, 'message': msg})
+        return web.json_response({'error': msg}, status=400)
+
+    async def handle_api_lyrics(self, request):
+        title = request.query.get('title')
+        artist = request.query.get('artist', '')
+        guild_id_str = request.query.get('guild_id')
+
+        music_cog = self.get_music_cog()
+        if not title and guild_id_str and music_cog:
+            try:
+                guild_id = int(guild_id_str)
+                curr = music_cog.current_tracks.get(guild_id)
+                if curr:
+                    title = curr.get('title')
+                    artist = curr.get('artist') or curr.get('uploader') or ''
+            except Exception:
+                pass
+
+        if not title:
+            return web.json_response({'error': 'No track title specified'}, status=400)
+
+        from utils.lyrics import fetch_lyrics
+        res = await fetch_lyrics(title, artist)
+        return web.json_response({'success': True, 'lyrics': res})
 
     async def handle_api_queue_remove(self, request):
         try:
@@ -204,84 +390,70 @@ class WebDashboard:
             guild_id = int(body.get('guild_id'))
             index = int(body.get('index'))
         except Exception:
-            return web.json_response({'error': 'Invalid request parameters'}, status=400)
+            return web.json_response({'error': 'Invalid parameters'}, status=400)
 
         music_cog = self.get_music_cog()
         if not music_cog:
             return web.json_response({'error': 'Music system not ready'}, status=503)
 
         success, msg = music_cog.remove_track_from_web(guild_id, index)
-        await self.broadcast_update()
-        return web.json_response({'success': success, 'message': msg})
+        if success:
+            await self.broadcast_update()
+            return web.json_response({'success': True, 'message': msg})
+        return web.json_response({'error': msg}, status=400)
 
     async def handle_websocket(self, request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
 
         self.websockets.add(ws)
-        _log.info(f"WebSocket client connected. Active: {len(self.websockets)}")
+        _log.info(f"WebSocket client connected. Total clients: {len(self.websockets)}")
 
-        # Send initial status immediately
         try:
             music_cog = self.get_music_cog()
-            metrics = self.get_system_metrics()
-            initial_data = {
-                'type': 'status_update',
-                'metrics': metrics,
-                'stats': metrics,
+            state = {
+                'type': 'initial_state',
+                'metrics': self.get_system_metrics(),
                 'guilds': music_cog.get_all_guilds_state() if music_cog else [],
             }
-            await ws.send_str(json.dumps(initial_data))
-        except Exception:
-            pass
+            await ws.send_str(json.dumps(state))
 
-        try:
             async for msg in ws:
                 if msg.type == WSMsgType.TEXT:
-                    try:
-                        payload = json.loads(msg.data)
-                        action = payload.get('action')
-                        if action == 'ping':
-                            await ws.send_str(json.dumps({'type': 'pong'}))
-                        elif action == 'refresh':
-                            await self.broadcast_update()
-                    except Exception:
-                        pass
+                    if msg.data == 'ping':
+                        await ws.send_str(json.dumps({'type': 'pong'}))
                 elif msg.type == WSMsgType.ERROR:
-                    _log.error(f"WebSocket connection closed with exception {ws.exception()}")
+                    _log.error(f"WS connection closed with exception {ws.exception()}")
         finally:
             self.websockets.discard(ws)
-            _log.info(f"WebSocket client disconnected. Active: {len(self.websockets)}")
+            _log.info(f"WebSocket client disconnected. Remaining: {len(self.websockets)}")
 
         return ws
 
     async def broadcast_update(self):
+        """Pushes state update to all active WebSocket clients."""
         if not self.websockets:
             return
-
         music_cog = self.get_music_cog()
-        metrics = self.get_system_metrics()
         payload = json.dumps({
-            'type': 'status_update',
-            'metrics': metrics,
-            'stats': metrics,
+            'type': 'state_update',
+            'metrics': self.get_system_metrics(),
             'guilds': music_cog.get_all_guilds_state() if music_cog else [],
         })
-
         dead_ws = set()
-        for ws in self.websockets:
+        for ws in list(self.websockets):
             try:
                 await ws.send_str(payload)
             except Exception:
                 dead_ws.add(ws)
-
         for ws in dead_ws:
             self.websockets.discard(ws)
 
     async def start_broadcast_loop(self):
+        """Broadcasts server metrics and status every 2.5 seconds."""
         while True:
             try:
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(2.5)
                 await self.broadcast_update()
             except asyncio.CancelledError:
                 break
