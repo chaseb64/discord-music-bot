@@ -435,6 +435,8 @@
       const artist = escapeHtml(item.uploader || item.artist || 'SoundCloud');
       const duration = formatDuration(item.duration || 0);
       const thumb = escapeHtml(item.thumbnail || '/static/images/vinyl.png');
+      const autoplayBadge = item.is_autoplay ? '<span class="queue-tag queue-tag-autoplay">⚡ Autoplay</span>' : '';
+      const readyBadge = item.is_prebuffered ? '<span class="queue-tag queue-tag-prebuffered" title="Pre-downloaded to disk for zero-gap playback">⚡ Ready</span>' : '';
 
       const itemDiv = document.createElement('div');
       itemDiv.className = 'queue-item';
@@ -443,7 +445,7 @@
         <img src="${thumb}" alt="Art" class="queue-item-thumb" onerror="this.src='/static/images/vinyl.png'">
         <div class="queue-item-info">
           <span class="queue-item-title" title="${title}">${title}</span>
-          <span class="queue-item-artist">${artist} &bull; ${duration}</span>
+          <span class="queue-item-artist">${artist} &bull; ${duration}${autoplayBadge}${readyBadge}</span>
         </div>
         <div class="queue-item-actions">
           ${index > 0 ? `<button class="btn-queue-move btn-move-up" data-idx="${index}" title="Move Up"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"></polyline></svg></button>` : ''}

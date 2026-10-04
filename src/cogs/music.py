@@ -10,7 +10,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import yt_dlp as youtube_dl
-from collections import defaultdict
+from collections import defaultdict, deque
 
 from utils.ffmpeg import get_ffmpeg_executable
 from utils.opus import ensure_opus
@@ -136,7 +136,8 @@ class YTDLSource(discord.PCMVolumeTransformer):
         return cls(source, data=data, file_path=file_path, volume=volume)
 
     @classmethod
-    async def from_url(cls, url: str, *, loop=None, volume: float = 0.5, seek: float = 0, filter_name: str = 'none'):
+    async def download_track(cls, url: str, *, loop=None) -> tuple[str, dict]:
+        """Downloads audio stream to downloads/ directory and returns (file_path, data) tuple."""
         loop = loop or asyncio.get_event_loop()
         data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=True))
 
@@ -162,6 +163,11 @@ class YTDLSource(discord.PCMVolumeTransformer):
         if not file_path or not os.path.exists(file_path):
             raise FileNotFoundError(f"Downloaded audio file not found on disk at {file_path}")
 
+        return file_path, data
+
+    @classmethod
+    async def from_url(cls, url: str, *, loop=None, volume: float = 0.5, seek: float = 0, filter_name: str = 'none'):
+        file_path, data = await cls.download_track(url, loop=loop)
         return cls.create_player(file_path, data, volume=volume, seek=seek, filter_name=filter_name)
 
 class QueuePaginationView(discord.ui.View):
@@ -225,6 +231,161 @@ class Music(commands.Cog):
         })
         # Internal flag to prevent play_next triggering during mid-stream seek/filter restarts
         self.is_switching = {}
+        # History of played titles and URLs per guild to avoid Autoplay looping/repeats
+        self.played_history = defaultdict(lambda: deque(maxlen=60))
+        # Active pre-buffering tasks per guild
+        self.prebuffering_tasks = {}
+
+    async def prebuffer_track(self, track: dict) -> bool:
+        """Pre-downloads the audio file for an upcoming track in the background for zero-gap playback."""
+        if not track:
+            return False
+        if track.get('is_local') or (track.get('file_path') and os.path.exists(track['file_path'])):
+            track['is_prebuffered'] = True
+            return True
+
+        if track.get('is_downloading'):
+            while track.get('is_downloading'):
+                await asyncio.sleep(0.2)
+            return bool(track.get('file_path') and os.path.exists(track['file_path']))
+
+        track['is_downloading'] = True
+        try:
+            print(f"[Pre-Buffer] Pre-downloading upcoming track: '{track.get('title')}' in background...")
+            file_path, data = await YTDLSource.download_track(track['url'], loop=self.bot.loop)
+            track['file_path'] = file_path
+            track['data'] = data
+            track['is_prebuffered'] = True
+            if not track.get('duration') and data.get('duration'):
+                track['duration'] = data['duration']
+            print(f"[Pre-Buffer] Successfully pre-buffered '{track.get('title')}' to {file_path}")
+            return True
+        except Exception as e:
+            print(f"[Pre-Buffer] Notice: Pre-buffer failed for '{track.get('title')}': {e}")
+            return False
+        finally:
+            track['is_downloading'] = False
+
+    async def _recommend_related_track(self, guild_id: int, current_track: dict) -> dict | None:
+        """Smart recommendation engine: queries SoundCloud/YouTube for related tracks avoiding played history."""
+        if not current_track:
+            return None
+
+        artist = current_track.get('artist') or current_track.get('uploader') or ''
+        raw_title = current_track.get('title') or ''
+
+        # Strip common video/upload noise from title for higher quality search
+        clean_title = re.sub(r'\(.*?\)|\[.*?\]', '', raw_title)
+        clean_title = re.sub(r'(?i)\b(official\s+video|official\s+audio|lyrics|lyric\s+video|ft\.?|feat\.?|remix|hd|4k)\b', '', clean_title).strip()
+        if not clean_title:
+            clean_title = raw_title.strip()
+
+        is_generic_artist = not artist or artist.lower() in ('soundcloud', 'youtube', 'unknown', 'various artists')
+        
+        search_queries = []
+        if not is_generic_artist:
+            search_queries.append(f"scsearch8:{artist} {clean_title} related")
+            search_queries.append(f"scsearch8:{artist} music")
+        else:
+            search_queries.append(f"scsearch8:{clean_title} related")
+            search_queries.append(f"scsearch8:{clean_title} music")
+
+        search_queries.append(f"ytsearch5:{artist} {clean_title} music" if not is_generic_artist else f"ytsearch5:{clean_title} music")
+
+        history = self.played_history[guild_id]
+        queued_urls = {t.get('url') for t in self.queues[guild_id] if t.get('url')}
+        queued_titles = {t.get('title', '').lower() for t in self.queues[guild_id]}
+        current_url = current_track.get('url')
+
+        search_opts = dict(ytdl_format_options)
+        search_opts['ignoreerrors'] = True
+        search_ytdl = youtube_dl.YoutubeDL(search_opts)
+        loop = self.bot.loop or asyncio.get_event_loop()
+
+        for query in search_queries:
+            try:
+                data = await loop.run_in_executor(None, lambda q=query: search_ytdl.extract_info(q, download=False))
+                if not data or 'entries' not in data:
+                    continue
+
+                entries = [e for e in data['entries'] if e]
+                for entry in entries:
+                    cand_url = entry.get('webpage_url') or entry.get('url')
+                    cand_title = entry.get('title') or ''
+                    cand_title_lower = cand_title.lower()
+                    duration = entry.get('duration') or 0
+
+                    if not cand_url or cand_url == current_url or cand_url in queued_urls:
+                        continue
+                    if cand_title_lower in queued_titles:
+                        continue
+                    if cand_url in history or any(h.lower() in cand_title_lower or cand_title_lower in h.lower() for h in history):
+                        continue
+                    if duration and (duration < 40 or duration > 900):
+                        continue
+
+                    thumbnail = entry.get('thumbnail')
+                    if not thumbnail and entry.get('thumbnails'):
+                        thumbnail = entry['thumbnails'][-1].get('url')
+
+                    return {
+                        'title': cand_title,
+                        'url': cand_url,
+                        'webpage_url': entry.get('webpage_url') or cand_url,
+                        'thumbnail': thumbnail or '/static/images/vinyl.png',
+                        'duration': duration,
+                        'artist': entry.get('uploader') or entry.get('channel') or entry.get('creator') or (artist if not is_generic_artist else 'Autoplay Radio'),
+                        'uploader': entry.get('uploader') or 'Autoplay Recommendation',
+                        'requester': '⚡ Autoplay',
+                        'is_local': False,
+                        'is_autoplay': True,
+                    }
+            except Exception as e:
+                print(f"[Autoplay] Search query '{query}' notice: {e}")
+                continue
+
+        return None
+
+    async def _ensure_next_track_ready(self, guild):
+        """Pre-downloads the upcoming track and/or pre-queues an Autoplay recommendation before current song ends."""
+        if not guild:
+            return
+
+        guild_id = guild.id
+        existing_task = self.prebuffering_tasks.get(guild_id)
+        if existing_task and not existing_task.done():
+            return
+
+        async def _worker():
+            try:
+                # 1. If queue has items: pre-download the very next item ahead of time!
+                if len(self.queues[guild_id]) > 0:
+                    next_track = self.queues[guild_id][0]
+                    if not next_track.get('is_prebuffered') and not next_track.get('is_local'):
+                        await self.prebuffer_track(next_track)
+                    return
+
+                # 2. If queue is empty, check if Autoplay is enabled
+                settings = self.guild_settings[guild_id]
+                if settings.get('autoplay', False):
+                    curr = self.current_tracks.get(guild_id)
+                    if curr:
+                        rec = await self._recommend_related_track(guild_id, curr)
+                        if rec:
+                            # Re-verify queue is still empty in case user queued a song during search
+                            if len(self.queues[guild_id]) == 0:
+                                self.queues[guild_id].append(rec)
+                                print(f"[Autoplay] Pre-queued upcoming track: '{rec['title']}'. Starting pre-download...")
+                                if hasattr(self.bot, 'web_dashboard') and self.bot.web_dashboard:
+                                    asyncio.create_task(self.bot.web_dashboard.broadcast_update())
+                                await self.prebuffer_track(rec)
+                            else:
+                                await self.prebuffer_track(self.queues[guild_id][0])
+            except Exception as e:
+                print(f"[Pre-Buffer] Worker error in guild {guild_id}: {e}")
+
+        task = asyncio.create_task(_worker())
+        self.prebuffering_tasks[guild_id] = task
 
     async def extract_track_info(self, query: str):
         """Extracts metadata and direct streamable info for a track or query."""
@@ -277,7 +438,21 @@ class Music(commands.Cog):
             curr_filter = settings.get('filter', 'none')
             curr_vol = track.get('volume', 0.5)
 
-            if track.get('is_local') and track.get('file_path') and os.path.exists(track['file_path']):
+            # Record track in played history to prevent Autoplay duplicate repetitions
+            if track.get('title'):
+                self.played_history[guild.id].append(track['title'])
+            if track.get('url'):
+                self.played_history[guild.id].append(track['url'])
+
+            # If background download is currently in progress, wait for it to complete
+            if track.get('is_downloading'):
+                for _ in range(50):
+                    if not track.get('is_downloading'):
+                        break
+                    await asyncio.sleep(0.2)
+
+            if track.get('file_path') and os.path.exists(track['file_path']):
+                # Already pre-buffered on disk! Instant zero-gap playback!
                 player = YTDLSource.create_player(
                     track['file_path'],
                     track.get('data', {}),
@@ -304,6 +479,7 @@ class Music(commands.Cog):
                 'uploader': track.get('uploader', 'SoundCloud'),
                 'requester': track.get('requester', 'Discord User'),
                 'is_local': track.get('is_local', False),
+                'is_autoplay': track.get('is_autoplay', False),
                 'file_path': player.file_path,
                 'data': player.data,
                 'start_time': time.time() - seek,
@@ -312,6 +488,10 @@ class Music(commands.Cog):
 
             track_record = dict(self.current_tracks[guild.id])
             voice_client.play(player, after=lambda e: self._on_playback_end(guild, voice_client, e, player.file_path, track_record))
+
+            # CRUCIAL: Immediately trigger pre-buffering of the upcoming track so it downloads BEFORE this track finishes!
+            asyncio.create_task(self._ensure_next_track_ready(guild))
+
         except Exception as e:
             self.current_tracks.pop(guild.id, None)
             print(f"Error playing track ({type(e).__name__}): {e}")
@@ -344,7 +524,7 @@ class Music(commands.Cog):
             # Re-enqueue track to end of queue
             self.queues[guild.id].append(track)
 
-        # Clean up downloaded file if not local upload and loop mode is off
+        # Clean up finished downloaded file if not local upload and loop mode is off
         if file_path and os.path.exists(file_path):
             if loop_mode != 'track' and not (track and track.get('is_local')):
                 try:
@@ -352,30 +532,25 @@ class Music(commands.Cog):
                 except Exception:
                     pass
 
-        # Advance queue or trigger Autoplay
+        # Advance queue or trigger Autoplay fallback
         if len(self.queues[guild.id]) > 0:
             self.play_next(guild, voice_client)
         elif settings.get('autoplay', False) and track:
-            asyncio.run_coroutine_threadsafe(self._autoplay_next(guild, voice_client, track), self.bot.loop)
+            asyncio.run_coroutine_threadsafe(self._autoplay_fallback(guild, voice_client, track), self.bot.loop)
         else:
             self.play_loops.pop(guild.id, None)
 
-    async def _autoplay_next(self, guild, voice_client, previous_track: dict):
-        """Autoplay recommendation engine: queries similar tracks by artist/genre when queue ends."""
+    async def _autoplay_fallback(self, guild, voice_client, previous_track: dict):
+        """Fallback in case pre-buffer did not finish pre-queueing before current playback ended."""
         try:
-            artist = previous_track.get('artist') or ''
-            title = previous_track.get('title') or ''
-            query = f"scsearch5:{artist} music" if artist and artist != 'SoundCloud' else f"scsearch5:{title} related"
-
-            track_info = await self.extract_track_info(query)
-            if track_info:
-                track_info['requester'] = '⚡ Autoplay'
-                self.queues[guild.id].append(track_info)
+            rec = await self._recommend_related_track(guild.id, previous_track)
+            if rec:
+                self.queues[guild.id].append(rec)
                 self.play_next(guild, voice_client)
             else:
                 self.play_loops.pop(guild.id, None)
         except Exception as e:
-            print(f"[Autoplay] Failed to find related track: {e}")
+            print(f"[Autoplay] Fallback error: {e}")
             self.play_loops.pop(guild.id, None)
 
     def get_guild_state(self, guild_id: int):
@@ -434,6 +609,8 @@ class Music(commands.Cog):
                 'uploader': t.get('uploader', 'SoundCloud'),
                 'requester': t.get('requester', 'Discord User'),
                 'is_local': t.get('is_local', False),
+                'is_autoplay': t.get('is_autoplay', False),
+                'is_prebuffered': bool(t.get('is_prebuffered') or (t.get('file_path') and os.path.exists(t.get('file_path')))),
             })
 
         return {
@@ -486,11 +663,17 @@ class Music(commands.Cog):
         if not voice_client:
             raise ValueError("Bot is not connected to a voice channel in this server.")
 
-        self.queues[guild.id].append(track_info)
+        # If queue begins with an automated autoplay recommendation, place user track ahead of it
+        if len(self.queues[guild.id]) > 0 and self.queues[guild.id][0].get('is_autoplay'):
+            self.queues[guild.id].insert(0, track_info)
+        else:
+            self.queues[guild.id].append(track_info)
 
         if not voice_client.is_playing() and guild.id not in self.play_loops:
             self.play_loops[guild.id] = True
             self.play_next(guild, voice_client)
+        else:
+            asyncio.create_task(self._ensure_next_track_ready(guild))
 
         return track_info
 
@@ -529,11 +712,17 @@ class Music(commands.Cog):
         if not voice_client:
             raise ValueError("Bot is not connected to a voice channel in this server.")
 
-        self.queues[guild.id].append(track_info)
+        # If queue begins with an automated autoplay recommendation, place user track ahead of it
+        if len(self.queues[guild.id]) > 0 and self.queues[guild.id][0].get('is_autoplay'):
+            self.queues[guild.id].insert(0, track_info)
+        else:
+            self.queues[guild.id].append(track_info)
 
         if not voice_client.is_playing() and guild.id not in self.play_loops:
             self.play_loops[guild.id] = True
             self.play_next(guild, voice_client)
+        else:
+            asyncio.create_task(self._ensure_next_track_ready(guild))
 
         return track_info
 
@@ -683,7 +872,32 @@ class Music(commands.Cog):
             self.guild_settings[guild_id]['autoplay'] = not self.guild_settings[guild_id].get('autoplay', False)
         else:
             self.guild_settings[guild_id]['autoplay'] = bool(enabled)
-        state = "enabled" if self.guild_settings[guild_id]['autoplay'] else "disabled"
+
+        is_on = self.guild_settings[guild_id]['autoplay']
+        state = "enabled" if is_on else "disabled"
+
+        guild = self.bot.get_guild(guild_id)
+        if guild:
+            if is_on:
+                # If currently playing, immediately pre-buffer the upcoming recommendation
+                if guild.voice_client and guild.voice_client.is_playing():
+                    asyncio.create_task(self._ensure_next_track_ready(guild))
+            else:
+                # Purge unplayed autoplay tracks from queue if disabled
+                q = self.queues[guild_id]
+                new_q = []
+                for t in q:
+                    if t.get('is_autoplay'):
+                        fp = t.get('file_path')
+                        if fp and os.path.exists(fp) and not t.get('is_local'):
+                            try:
+                                os.remove(fp)
+                            except Exception:
+                                pass
+                    else:
+                        new_q.append(t)
+                self.queues[guild_id] = new_q
+
         return True, f"Autoplay {state}."
 
     def shuffle_queue(self, guild_id: int):
@@ -727,12 +941,19 @@ class Music(commands.Cog):
                 return
 
             track_info['requester'] = interaction.user.display_name
-            self.queues[interaction.guild.id].append(track_info)
+            # If queue begins with an automated autoplay recommendation, place user track ahead of it
+            if len(self.queues[interaction.guild.id]) > 0 and self.queues[interaction.guild.id][0].get('is_autoplay'):
+                self.queues[interaction.guild.id].insert(0, track_info)
+            else:
+                self.queues[interaction.guild.id].append(track_info)
+
             await interaction.followup.send(f"Added to queue: **{track_info['title']}**")
 
             if not voice_client.is_playing() and interaction.guild.id not in self.play_loops:
                 self.play_loops[interaction.guild.id] = True
                 self.play_next(interaction.guild, voice_client)
+            else:
+                asyncio.create_task(self._ensure_next_track_ready(interaction.guild))
 
         except Exception as e:
             traceback.print_exc()

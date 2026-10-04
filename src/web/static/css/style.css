@@ -272,11 +272,24 @@ img {
   gap: 16px;
 }
 
+/* Accessibility Utility */
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
 /* Server Selector Dropdown */
 .server-select-wrap,
 .guild-select-wrap {
   position: relative;
-  display: flex;
+  display: inline-flex;
   align-items: center;
 }
 
@@ -286,16 +299,31 @@ img {
   pointer-events: none;
   display: flex;
   align-items: center;
+  justify-content: center;
+  color: var(--blurple);
+  z-index: 2;
+}
+
+.custom-select-arrow {
+  position: absolute;
+  right: 14px;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-muted);
-  z-index: 1;
+  z-index: 2;
+  transition: transform var(--transition-fast);
 }
 
 .guild-select {
   appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-main);
   border: 1px solid var(--border-glass);
-  padding: 10px 36px 10px 40px;
+  padding: 10px 38px 10px 42px;
   font-family: var(--font-family);
   font-size: 0.92rem;
   font-weight: 500;
@@ -1413,6 +1441,30 @@ img {
   background: var(--emerald);
   box-shadow: 0 0 8px var(--emerald);
   animation: pulseDot 1.8s infinite;
+}
+
+.queue-tag {
+  font-size: 0.65rem;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.queue-tag-autoplay {
+  background: rgba(168, 85, 247, 0.15);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  color: #c084fc;
+}
+
+.queue-tag-prebuffered {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #34d399;
 }
 
 .btn-header-action {
