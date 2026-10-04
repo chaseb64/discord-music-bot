@@ -6,11 +6,24 @@ import asyncio
 # Ensure src directory is in sys.path
 sys.path.insert(0, os.path.abspath('src'))
 
-from cogs.music import sanitize_query, MAX_QUEUE_SIZE, MAX_QUERY_LENGTH
+from cogs.music import sanitize_query, probe_audio_duration, MAX_QUEUE_SIZE, MAX_QUERY_LENGTH
 from utils.lyrics import clean_title, parse_lrc
 
 
 class TestInputSanitizationAndHardening(unittest.TestCase):
+
+    def test_probe_audio_duration_sanitization(self):
+        # Non-existent path or invalid type returns 0.0
+        self.assertEqual(probe_audio_duration("non_existent_file.mp3"), 0.0)
+        self.assertEqual(probe_audio_duration(""), 0.0)
+        self.assertEqual(probe_audio_duration(None), 0.0)
+
+        # Directory path returns 0.0 (not a regular file)
+        self.assertEqual(probe_audio_duration(os.path.dirname(__file__)), 0.0)
+
+        # Attempt option injection with leading dashes
+        self.assertEqual(probe_audio_duration("-v"), 0.0)
+        self.assertEqual(probe_audio_duration("-help"), 0.0)
 
     def test_sanitize_query_truncation_and_strip(self):
         long_query = "a" * 1000
