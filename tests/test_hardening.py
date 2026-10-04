@@ -39,6 +39,44 @@ class TestInputSanitizationAndHardening(unittest.TestCase):
         self.assertEqual(parsed[0], {'time': 10.5, 'text': 'Hello world'})
         self.assertEqual(parsed[1], {'time': 80.0, 'text': 'Second line'})
 
+    def test_parse_lrc_malformed_and_edge_cases(self):
+        # Test empty input and whitespace-only
+        self.assertEqual(parse_lrc(""), [])
+        self.assertEqual(parse_lrc("   \n\n\t  "), [])
+
+        # Test metadata lines (e.g. [ar:Artist], [ti:Title])
+        metadata_lrc = "[ar: Artist Name]\n[ti: Song Title]\n[al: Album]\n[by: Creator]\n[00:05.00] Actual lyric"
+        parsed_metadata = parse_lrc(metadata_lrc)
+        self.assertEqual(len(parsed_metadata), 1)
+        self.assertEqual(parsed_metadata[0], {'time': 5.0, 'text': 'Actual lyric'})
+
+        # Test timestamp without text (empty lyric text)
+        empty_text_lrc = "[00:10.00]\n[00:15.00]   \n[00:20.00] Real text"
+        parsed_empty_text = parse_lrc(empty_text_lrc)
+        self.assertEqual(len(parsed_empty_text), 1)
+        self.assertEqual(parsed_empty_text[0], {'time': 20.0, 'text': 'Real text'})
+
+        # Test malformed timestamp formats (missing brackets, non-numeric, improper colon/dot formatting)
+        malformed_lrc = (
+            "00:12.34 Missing leading bracket\n"
+            "[00:12.34 Missing trailing bracket\n"
+            "[xx:yy.zz] Non numeric\n"
+            "[001234] Missing colon\n"
+            "Just random text\n"
+            "[00:10] Integer seconds\n"
+            "[01:02.345] High precision seconds"
+        )
+        parsed_malformed = parse_lrc(malformed_lrc)
+        self.assertEqual(len(parsed_malformed), 2)
+        self.assertEqual(parsed_malformed[0], {'time': 10.0, 'text': 'Integer seconds'})
+        self.assertEqual(parsed_malformed[1], {'time': 62.34, 'text': 'High precision seconds'})
+
+        # Test unicode, special characters, and extra spacing around lines
+        unicode_lrc = "  \t [02:00.50]   🎵 Music Note & Special Chars! 🤖   \n"
+        parsed_unicode = parse_lrc(unicode_lrc)
+        self.assertEqual(len(parsed_unicode), 1)
+        self.assertEqual(parsed_unicode[0], {'time': 120.5, 'text': '🎵 Music Note & Special Chars! 🤖'})
+
     def test_path_traversal_prevention(self):
         uploads_dir = os.path.abspath(os.path.join('downloads', 'uploads'))
 
