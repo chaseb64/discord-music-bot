@@ -50,10 +50,13 @@ def parse_lrc(lrc_text: str) -> list[dict]:
     return lines
 
 def _fetch_sync(url: str):
-    req = urllib.request.Request(url, headers={'User-Agent': 'DiscordMusicBot/2.0 (GitHub: chaseb64/discord-music-bot)'})
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        if resp.status == 200:
-            return json.loads(resp.read().decode('utf-8'))
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'DiscordMusicBot/2.0 (GitHub: chaseb64/discord-music-bot)'})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status == 200:
+                return json.loads(resp.read().decode('utf-8'))
+    except Exception as e:
+        print(f"[Lyrics] Sync fetch notice ({type(e).__name__}): {e}")
     return None
 
 async def fetch_lyrics(title: str, artist: str = "") -> dict:
