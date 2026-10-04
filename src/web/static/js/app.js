@@ -510,7 +510,7 @@
     if (statStreams) statStreams.textContent = streams;
     if (statGuilds) statGuilds.textContent = guilds;
 
-    const versionTag = (stats.release && stats.release.tag) || stats.version || 'v2.4.0';
+    const versionTag = (stats.release && stats.release.tag) || stats.version || 'v2.4.1';
     const update = (stats && stats.update_info) || null;
     if (appVersionBadge) {
       if (update && update.has_update) {
