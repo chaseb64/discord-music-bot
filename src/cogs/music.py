@@ -7,45 +7,7 @@ from discord import app_commands
 import yt_dlp as youtube_dl
 from collections import defaultdict
 
-import subprocess
-
-def is_working_ffmpeg(path):
-    if not path:
-        return False
-    try:
-        p = subprocess.run([path, '-version'], capture_output=True, text=True, timeout=3)
-        return p.returncode == 0
-    except Exception:
-        return False
-
-# Helper to resolve a valid FFmpeg executable path across all platforms/containers
-def get_ffmpeg_executable():
-    # 1. Custom environment variable override if specified
-    custom_path = os.getenv('FFMPEG_PATH')
-    if custom_path and is_working_ffmpeg(custom_path):
-        return custom_path
-
-    # 2. Check standard system locations
-    candidates = [
-        shutil.which('ffmpeg'),
-        '/usr/bin/ffmpeg',
-        '/usr/local/bin/ffmpeg',
-        'ffmpeg'
-    ]
-    for c in candidates:
-        if c and is_working_ffmpeg(c):
-            return c
-
-    # 3. Optional fallback to imageio-ffmpeg if available and functional
-    try:
-        import imageio_ffmpeg
-        exe = imageio_ffmpeg.get_ffmpeg_exe()
-        if is_working_ffmpeg(exe):
-            return exe
-    except Exception:
-        pass
-
-    return None
+from utils.ffmpeg import get_ffmpeg_executable
 
 # Suppress noise about console usage from errors
 youtube_dl.utils.bug_reports_message = lambda *args, **kwargs: ''

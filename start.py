@@ -1,43 +1,31 @@
 import os
-import shutil
 import subprocess
 import sys
 
-def check_ffmpeg():
-    candidates = [
-        os.getenv('FFMPEG_PATH'),
-        shutil.which('ffmpeg'),
-        '/usr/bin/ffmpeg',
-        '/usr/local/bin/ffmpeg',
-        'ffmpeg'
-    ]
-    for c in candidates:
-        if c:
-            try:
-                p = subprocess.run([c, '-version'], capture_output=True, text=True, timeout=3)
-                if p.returncode == 0:
-                    return c
-            except Exception:
-                pass
-    return None
+# Add src to sys.path so utils can be imported
+sys.path.insert(0, os.path.abspath('src'))
 
 def main():
+    # Remove incompatible static-ffmpeg package if it was previously installed
+    try:
+        subprocess.run([sys.executable, "-m", "pip", "uninstall", "-y", "static-ffmpeg"], capture_output=True)
+    except Exception:
+        pass
+
     # Install dependencies
     print("Installing requirements...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
 
-    # Check for working FFmpeg executable
-    ffmpeg_bin = check_ffmpeg()
-    if ffmpeg_bin:
-        print(f"Verified working FFmpeg at: {ffmpeg_bin}")
-    else:
-        print("=" * 65)
-        print("[WARNING] No working FFmpeg binary found for your operating system.")
-        print("If you are running in a Pterodactyl container (Alpine Linux):")
-        print("  1. Go to your server web panel -> 'Startup' tab.")
-        print("  2. In 'Additional Packages' (or 'PACKAGES'), enter: ffmpeg")
-        print("  3. Restart your server.")
-        print("=" * 65)
+    # Ensure working FFmpeg binary is available (auto-downloads static musl binary on Linux if needed)
+    try:
+        from utils.ffmpeg import ensure_ffmpeg
+        ffmpeg_bin = ensure_ffmpeg()
+        if ffmpeg_bin:
+            print(f"[FFmpeg] Verified working FFmpeg at: {ffmpeg_bin}")
+        else:
+            print("[FFmpeg] Notice: System FFmpeg was not detected.")
+    except Exception as e:
+        print(f"[FFmpeg] Verification note: {e}")
 
     # Run the bot
     print("Starting the bot...")
