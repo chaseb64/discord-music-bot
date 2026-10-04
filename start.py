@@ -12,9 +12,25 @@ def main():
     except Exception:
         pass
 
-    # Install dependencies
+    # Auto-sync latest code from GitHub if .git directory exists
+    if os.path.exists('.git'):
+        try:
+            print("[Auto-Sync] Pulling latest code from GitHub...")
+            res = subprocess.run(["git", "pull", "--ff-only"], capture_output=True, text=True, timeout=10)
+            if res.returncode == 0:
+                print(f"[Auto-Sync] Code up-to-date: {res.stdout.strip()}")
+            else:
+                print(f"[Auto-Sync] Git pull notice: {res.stderr.strip()}")
+        except Exception as e:
+            print(f"[Auto-Sync] Notice: Could not auto-pull git updates: {e}")
+
+    # Install dependencies and ensure yt-dlp is latest
     print("Installing requirements...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+    try:
+        subprocess.run([sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"], capture_output=True, timeout=30)
+    except Exception:
+        pass
 
     # Ensure working FFmpeg binary is available (auto-downloads static musl binary on Linux if needed)
     try:
