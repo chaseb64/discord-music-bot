@@ -1,4 +1,5 @@
 import asyncio
+import os
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -20,7 +21,16 @@ ytdl_format_options = {
     'no_warnings': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',  # bind to ipv4 since ipv6 addresses cause issues sometimes
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android', 'ios'],
+        }
+    },
 }
+
+cookies_path = os.getenv('YTDL_COOKIES_FILE', 'cookies.txt')
+if os.path.exists(cookies_path):
+    ytdl_format_options['cookiefile'] = cookies_path
 
 ffmpeg_options = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
@@ -163,7 +173,7 @@ class Music(commands.Cog):
 
             track_info = {
                 'title': data.get('title'),
-                'url': query # if query is search, we'll re-resolve it at play time
+                'url': data.get('webpage_url') or query
             }
 
             self.queues[interaction.guild.id].append(track_info)
