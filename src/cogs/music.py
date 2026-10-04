@@ -1,17 +1,41 @@
 import asyncio
 import os
+import shutil
 import discord
 from discord.ext import commands
 from discord import app_commands
 import yt_dlp as youtube_dl
 from collections import defaultdict
 
-# Automatically register portable static ffmpeg binary paths if installed
-try:
-    import static_ffmpeg
-    static_ffmpeg.add_paths()
-except ImportError:
-    pass
+# Helper to resolve a valid FFmpeg executable path across all platforms/containers
+def get_ffmpeg_executable():
+    # 1. Custom environment variable override if specified
+    custom_path = os.getenv('FFMPEG_PATH')
+    if custom_path and shutil.which(custom_path):
+        return custom_path
+
+    # 2. Prefer bundled imageio-ffmpeg binary if installed (provides standalone absolute path)
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and os.path.exists(exe):
+            return exe
+    except Exception:
+        pass
+
+    # 3. Try static-ffmpeg
+    try:
+        import static_ffmpeg
+        static_ffmpeg.add_paths()
+    except Exception:
+        pass
+
+    # 4. Check system PATH
+    which_bin = shutil.which('ffmpeg')
+    if which_bin:
+        return which_bin
+
+    return 'ffmpeg'
 
 # Suppress noise about console usage from errors
 youtube_dl.utils.bug_reports_message = lambda *args, **kwargs: ''
@@ -26,7 +50,7 @@ ytdl_format_options = {
     'logtostderr': False,
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'auto',
+    'default_search': 'scsearch',  # Search SoundCloud by default when no URL given
     'source_address': '0.0.0.0',  # bind to ipv4 since ipv6 addresses cause issues sometimes
     'extractor_args': {
         'youtube': {
@@ -64,7 +88,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
             data = data['entries'][0]
 
         filename = data['url'] if stream else ytdl.prepare_filename(data)
-        ffmpeg_executable = os.getenv('FFMPEG_PATH', 'ffmpeg')
+        ffmpeg_executable = get_ffmpeg_executable()
         return cls(discord.FFmpegPCMAudio(filename, executable=ffmpeg_executable, **ffmpeg_options), data=data)
 
 class QueuePaginationView(discord.ui.View):
@@ -153,8 +177,8 @@ class Music(commands.Cog):
 
         self.play_next(guild, voice_client)
 
-    @app_commands.command(name="play", description="Plays a song from YouTube.")
-    @app_commands.describe(query="The song to play (URL or search query)")
+    @app_commands.command(name="play", description="Plays a song from SoundCloud or a direct URL.")
+    @app_commands.describe(query="The song to play (URL or SoundCloud search keywords)")
     async def play(self, interaction: discord.Interaction, query: str):
         if not interaction.user.voice:
             await interaction.response.send_message("You are not connected to a voice channel.", ephemeral=True)
@@ -172,17 +196,20 @@ class Music(commands.Cog):
             await voice_client.move_to(channel)
 
         try:
+            # If not a direct URL, search SoundCloud
+            target = query if query.startswith(('http://', 'https://', 'scsearch:', 'ytsearch:')) else f"scsearch:{query}"
+
             # We just extract info first to get title/url to add to queue
             # We don't build the player until it's time to play, to prevent URL expiry
             loop = self.bot.loop or asyncio.get_event_loop()
-            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(query, download=False))
+            data = await loop.run_in_executor(None, lambda: ytdl.extract_info(target, download=False))
 
             if 'entries' in data:
                 data = data['entries'][0]
 
             track_info = {
                 'title': data.get('title'),
-                'url': data.get('webpage_url') or query
+                'url': data.get('webpage_url') or data.get('url') or target
             }
 
             self.queues[interaction.guild.id].append(track_info)
