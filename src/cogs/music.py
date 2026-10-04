@@ -153,79 +153,81 @@ class YTDLSource(discord.PCMVolumeTransformer):
         return cls(source, data=data, file_path=file_path, volume=volume)
 
     @classmethod
-    async def download_track(cls, url: str, *, fallback_urls: list = None, title: str = None, loop=None) -> tuple[str, dict]:
-        """Downloads audio stream to downloads/ directory with multi-candidate resilience and returns (file_path, data) tuple."""
-        loop = loop or asyncio.get_event_loop()
+    def _try_download_candidates(cls, urls: list) -> tuple[tuple[str, dict] | None, Exception | None]:
+        """Tries downloading from a list of candidate URLs. Returns ((target_url, data), last_error)."""
+        last_err = None
+        for target in urls:
+            try:
+                data = ytdl.extract_info(target, download=True)
+                if data:
+                    return (target, data), None
+            except Exception as e:
+                print(f"[YTDL] Candidate '{target}' failed ({type(e).__name__}: {e})")
+                last_err = e
+        return None, last_err
 
-        def _do_download():
-            urls_to_try = [url] + (list(fallback_urls) if fallback_urls else [])
-            last_err = None
+    @classmethod
+    def _perform_fallback_search(cls, url: str, title: str, exclude_urls: list) -> tuple[str, dict] | None:
+        """Attempts smart alternative search (e.g. SoundCloud Go+ / DRM protected tracks) and downloads if candidate found."""
+        search_query = None
+        m = re.match(r'https?://soundcloud\.com/([^/]+)/([^/?#]+)', url)
+        if m:
+            artist_slug, track_slug = m.groups()
+            search_query = f"{artist_slug} {track_slug}".replace('-', ' ')
+        elif title:
+            search_query = title
 
-            for target in urls_to_try:
-                try:
-                    data = ytdl.extract_info(target, download=True)
-                    if data:
-                        return target, data
-                except Exception as e:
-                    print(f"[YTDL] Candidate '{target}' failed ({type(e).__name__}: {e})")
-                    last_err = e
+        if not search_query:
+            return None
 
-            # If initial URL and fallbacks failed, attempt smart alternative search
-            # (e.g. for SoundCloud Go+ / DRM protected tracks or region locks)
-            search_query = None
-            m = re.match(r'https?://soundcloud\.com/([^/]+)/([^/?#]+)', url)
-            if m:
-                artist_slug, track_slug = m.groups()
-                search_query = f"{artist_slug} {track_slug}".replace('-', ' ')
-            elif title:
-                search_query = title
+        print(f"[YTDL] Attempting fallback search for alternative uploads: '{search_query}'")
+        flat_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': True,
+            'skip_download': True,
+            'ignoreerrors': True,
+            'default_search': 'scsearch',
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+                'Accept-Language': 'en-US,en;q=0.9',
+            }
+        }
+        flat_ydl = youtube_dl.YoutubeDL(flat_opts)
+        try:
+            search_res = flat_ydl.extract_info(f"scsearch5:{search_query}", download=False)
+            if search_res and 'entries' in search_res:
+                for entry in search_res['entries']:
+                    if not entry:
+                        continue
+                    cand = entry.get('webpage_url') or entry.get('url')
+                    if cand and cand not in exclude_urls:
+                        try:
+                            print(f"[YTDL] Trying alternative upload: '{cand}'")
+                            data = ytdl.extract_info(cand, download=True)
+                            if data:
+                                return cand, data
+                        except Exception as cand_err:
+                            print(f"[YTDL] Alternative candidate failed: {cand_err}")
+                            continue
+        except Exception as search_err:
+            print(f"[YTDL] Fallback search error: {search_err}")
 
-            if search_query:
-                print(f"[YTDL] Attempting fallback search for alternative uploads: '{search_query}'")
-                flat_opts = {
-                    'quiet': True,
-                    'no_warnings': True,
-                    'extract_flat': True,
-                    'skip_download': True,
-                    'ignoreerrors': True,
-                    'default_search': 'scsearch',
-                    'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                    }
-                }
-                flat_ydl = youtube_dl.YoutubeDL(flat_opts)
-                try:
-                    search_res = flat_ydl.extract_info(f"scsearch5:{search_query}", download=False)
-                    if search_res and 'entries' in search_res:
-                        for entry in search_res['entries']:
-                            if not entry:
-                                continue
-                            cand = entry.get('webpage_url') or entry.get('url')
-                            if cand and cand not in urls_to_try:
-                                try:
-                                    print(f"[YTDL] Trying alternative upload: '{cand}'")
-                                    data = ytdl.extract_info(cand, download=True)
-                                    if data:
-                                        return cand, data
-                                except Exception as cand_err:
-                                    print(f"[YTDL] Alternative candidate failed: {cand_err}")
-                                    continue
-                except Exception as search_err:
-                    print(f"[YTDL] Fallback search error: {search_err}")
+        return None
 
-            if last_err:
-                raise last_err
-            raise RuntimeError(f"Unable to download audio stream for {url}")
-
-        final_url, data = await loop.run_in_executor(None, _do_download)
-
+    @classmethod
+    def _extract_first_entry(cls, data: dict) -> dict:
+        """Extracts the first valid track entry if data represents a playlist or entry list."""
         if 'entries' in data:
             valid_entries = [e for e in data['entries'] if e]
             if not valid_entries:
                 raise RuntimeError("No valid entries found for this track/playlist.")
-            data = valid_entries[0]
+            return valid_entries[0]
+        return data
 
+    @classmethod
+    def _resolve_file_path(cls, data: dict) -> str:
+        """Resolves and verifies the local file path on disk for downloaded audio data."""
         file_path = None
         if 'requested_downloads' in data and len(data['requested_downloads']) > 0:
             file_path = data['requested_downloads'][0].get('filepath')
@@ -241,6 +243,31 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
         if not file_path or not os.path.exists(file_path):
             raise FileNotFoundError(f"Downloaded audio file not found on disk at {file_path}")
+
+        return file_path
+
+    @classmethod
+    async def download_track(cls, url: str, *, fallback_urls: list = None, title: str = None, loop=None) -> tuple[str, dict]:
+        """Downloads audio stream to downloads/ directory with multi-candidate resilience and returns (file_path, data) tuple."""
+        loop = loop or asyncio.get_event_loop()
+
+        def _do_download():
+            urls_to_try = [url] + (list(fallback_urls) if fallback_urls else [])
+            res, last_err = cls._try_download_candidates(urls_to_try)
+            if res:
+                return res
+
+            fallback_res = cls._perform_fallback_search(url, title, exclude_urls=urls_to_try)
+            if fallback_res:
+                return fallback_res
+
+            if last_err:
+                raise last_err
+            raise RuntimeError(f"Unable to download audio stream for {url}")
+
+        final_url, data = await loop.run_in_executor(None, _do_download)
+        data = cls._extract_first_entry(data)
+        file_path = cls._resolve_file_path(data)
 
         return file_path, data
 
