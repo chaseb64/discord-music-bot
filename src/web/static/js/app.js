@@ -427,7 +427,7 @@
       if (hasLiveAudio) {
         // ACTUAL real-time frequency spectrum directly from the music playback!
         const bandVal = realAudioBands[i] || 0.0;
-        targetHeights[i] = Math.max(3, bandVal * (h * 0.94));
+        targetHeights[i] = Math.max(3, bandVal * (h * 0.90));
       } else if (isPlaying && !isPaused) {
         // Subtle rhythmic idle wave while audio starts
         const idleWave = Math.sin(time * 2.0 + i * 0.25) * 0.15 + 0.2;
@@ -438,12 +438,12 @@
         targetHeights[i] = idleWave * (h * 0.2);
       }
 
-      // Responsive attack (0.6) and smooth decay (0.28)
+      // Snappy attack (0.75) and smooth natural decay (0.22)
       const diff = targetHeights[i] - barHeights[i];
       if (diff > 0) {
-        barHeights[i] += diff * 0.6; // Instant reaction to beats / bass
+        barHeights[i] += diff * 0.75; // Snappy instant reaction to beats / bass
       } else {
-        barHeights[i] += diff * 0.28; // Smooth studio falloff
+        barHeights[i] += diff * 0.22; // Natural physics falloff
       }
 
       const barHeight = Math.max(3, barHeights[i]);

@@ -62,7 +62,7 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.file_path = file_path
         self.title = data.get('title')
         self.url = data.get('url')
-        self.analyzer = AudioSpectrumAnalyzer(num_bands=36, fft_size=256)
+        self.analyzer = AudioSpectrumAnalyzer(num_bands=36, fft_size=512)
         self.latest_bands = [0.0] * 36
 
     def read(self) -> bytes:
