@@ -158,45 +158,78 @@ img {
   box-shadow: var(--shadow-card);
 }
 
+.brand-group,
 .brand-section {
   display: flex;
   align-items: center;
   gap: 16px;
 }
 
+.brand-avatar-wrap,
 .brand-logo-wrap {
   position: relative;
   width: 48px;
   height: 48px;
   min-width: 48px;
   max-width: 48px;
+  max-height: 48px;
   border-radius: 14px;
-  overflow: hidden;
   flex-shrink: 0;
   box-shadow: 0 4px 12px rgba(88, 101, 242, 0.4);
 }
 
+.brand-avatar,
 .brand-logo {
-  width: 48px;
-  height: 48px;
-  max-width: 48px;
-  max-height: 48px;
+  width: 48px !important;
+  height: 48px !important;
+  min-width: 48px !important;
+  max-width: 48px !important;
+  min-height: 48px !important;
+  max-height: 48px !important;
+  border-radius: 14px;
   object-fit: cover;
   display: block;
 }
 
+.online-indicator {
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--emerald);
+  border: 2px solid #0e111a;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+  animation: pulseDot 2s infinite ease-in-out;
+}
+
+.brand-text,
 .brand-info {
   display: flex;
   flex-direction: column;
+  gap: 2px;
 }
 
+.brand-name,
 .brand-title {
   font-size: 1.35rem;
   font-weight: 700;
   letter-spacing: -0.02em;
+  margin: 0;
   background: linear-gradient(135deg, #FFF 20%, #A5B4FC 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+}
+
+.brand-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--blurple);
+  text-transform: uppercase;
 }
 
 .status-badge {
@@ -240,10 +273,21 @@ img {
 }
 
 /* Server Selector Dropdown */
+.server-select-wrap,
 .guild-select-wrap {
   position: relative;
   display: flex;
   align-items: center;
+}
+
+.custom-select-icon {
+  position: absolute;
+  left: 14px;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  z-index: 1;
 }
 
 .guild-select {
@@ -251,7 +295,7 @@ img {
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-main);
   border: 1px solid var(--border-glass);
-  padding: 10px 40px 10px 16px;
+  padding: 10px 36px 10px 40px;
   font-family: var(--font-family);
   font-size: 0.92rem;
   font-weight: 500;
@@ -274,6 +318,34 @@ img {
   pointer-events: none;
   font-size: 0.8rem;
   color: var(--text-muted);
+}
+
+/* Live Sync Connection Status */
+.connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 10px;
+  padding: 8px 14px;
+}
+
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--emerald);
+  box-shadow: 0 0 10px var(--emerald);
+  animation: pulseDot 2s infinite ease-in-out;
+}
+
+.status-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--emerald);
+  text-transform: uppercase;
 }
 
 /* Vitals Pill */

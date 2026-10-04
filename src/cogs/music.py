@@ -117,9 +117,15 @@ class YTDLSource(discord.PCMVolumeTransformer):
         if filter_str:
             opts += f' -af "{filter_str}"'
 
-        before_opts = '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
+        before_opts_list = []
         if seek and seek > 0:
-            before_opts = f'-ss {int(seek)} ' + before_opts
+            before_opts_list.append(f'-ss {int(seek)}')
+
+        # Only pass HTTP reconnect options when input is a remote URL stream (NOT local files)
+        if file_path.startswith(('http://', 'https://')):
+            before_opts_list.append('-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5')
+
+        before_opts = " ".join(before_opts_list) if before_opts_list else None
 
         source = discord.FFmpegPCMAudio(
             file_path,
