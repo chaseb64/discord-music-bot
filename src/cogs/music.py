@@ -9,6 +9,7 @@ import traceback
 import discord
 from discord.ext import commands
 from discord import app_commands
+from concurrent.futures import ThreadPoolExecutor
 import yt_dlp as youtube_dl
 from collections import defaultdict, deque
 
@@ -98,6 +99,8 @@ def probe_audio_duration(file_path: str) -> float:
 
 ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
 
+_fft_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='fft_analyzer')
+
 class YTDLSource(discord.PCMVolumeTransformer):
     def __init__(self, source, *, data, file_path, volume=0.5):
         super().__init__(source, volume)
@@ -107,16 +110,25 @@ class YTDLSource(discord.PCMVolumeTransformer):
         self.url = data.get('url')
         self.analyzer = AudioSpectrumAnalyzer(num_bands=36, fft_size=512)
         self.latest_bands = [0.0] * 36
+        self._is_analyzing = False
+
+    def _async_analyze(self, pcm_bytes: bytes):
+        try:
+            self.latest_bands = self.analyzer.analyze(pcm_bytes)
+        except Exception:
+            pass
+        finally:
+            self._is_analyzing = False
 
     def read(self) -> bytes:
         data = super().read()
         if data:
-            try:
-                self.latest_bands = self.analyzer.analyze(data)
-            except Exception:
-                pass
+            if not self._is_analyzing:
+                self._is_analyzing = True
+                _fft_executor.submit(self._async_analyze, data)
         else:
             self.latest_bands = [0.0] * 36
+            self._is_analyzing = False
         return data
 
     @property
