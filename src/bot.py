@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 from utils.opus import ensure_opus
+from utils.banner import print_banner
 
 # Load environment variables
 load_dotenv()
@@ -61,14 +62,20 @@ class MusicBot(commands.Bot):
         await super().close()
 
     async def on_ready(self):
-        print(f'Logged in as {self.user} (ID: {self.user.id})')
-        print('------')
+        port = os.getenv("PORT", "25567")
+        print(f'\033[92m[Aether Beats]\033[0m Logged in as \033[1m{self.user}\033[0m (ID: {self.user.id})')
+        print(f'\033[96m[Aether Beats]\033[0m Command Center ready at \033[4;92mhttp://localhost:{port}\033[0m')
+        print('-------------------------------------------------------------------')
 
 def main():
     token = os.getenv("DISCORD_TOKEN")
     if not token or token == "your_discord_bot_token_here":
         print("Please set your DISCORD_TOKEN in the .env file.")
         return
+
+    # Print neon cyberpunk ASCII startup banner
+    port = int(os.getenv("PORT", "25567"))
+    print_banner(port)
 
     # Ensure libopus is loaded for Discord voice support
     if not ensure_opus():
